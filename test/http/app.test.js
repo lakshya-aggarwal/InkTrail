@@ -113,3 +113,27 @@ test('write routes require valid JSON and domain errors have a stable shape', as
     body: { error: { code: 'not_found', message: 'novel not found', retryable: false, resourceId: 'missing' } }
   });
 });
+
+test('malformed path encoding returns a stable validation error', async () => {
+  const malformedPath = await requestJson(app, 'GET', '/api/v1/novels/%ZZ');
+
+  assert.deepEqual(malformedPath, {
+    status: 400,
+    body: { error: { code: 'validation_error', message: 'Malformed URL path parameter', retryable: false } }
+  });
+});
+
+test('reader chapter not-found errors identify the missing novel or chapter', async () => {
+  const novel = await requestJson(app, 'POST', '/api/v1/novels', { title: 'Return of the War God' });
+  const missingNovel = await requestJson(app, 'GET', '/api/v1/novels/missing/chapters/1');
+  const missingChapter = await requestJson(app, 'GET', `/api/v1/novels/${novel.body.id}/chapters/1`);
+
+  assert.deepEqual(missingNovel, {
+    status: 404,
+    body: { error: { code: 'not_found', message: 'novel not found', retryable: false, resourceId: 'missing' } }
+  });
+  assert.deepEqual(missingChapter, {
+    status: 404,
+    body: { error: { code: 'not_found', message: 'chapter not found', retryable: false, resourceId: '1' } }
+  });
+});
