@@ -31,3 +31,22 @@ test('migration is recorded once and foreign keys are enforced', () => {
   assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 1);
   assert.throws(() => database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'missing-novel', 1, 'One', '2026-10-11T00:00:00.000Z'));
 });
+
+test('migration acquires an immediate transaction before schema work', () => {
+  const commands = [];
+  const database = {
+    exec(sql) {
+      commands.push(sql);
+      if (sql.startsWith('create table schema_migrations')) {
+        throw new Error('migration failed');
+      }
+    },
+    prepare() {
+      return { get: () => undefined };
+    }
+  };
+
+  assert.throws(() => migrate(database), /migration failed/);
+  assert.equal(commands[0], 'begin immediate');
+  assert.equal(commands.at(-1), 'rollback');
+});

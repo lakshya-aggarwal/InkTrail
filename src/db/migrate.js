@@ -22,7 +22,7 @@ function appliedVersions(database) {
 }
 
 export function migrate(database) {
-  database.exec('begin');
+  database.exec('begin immediate');
   try {
     const applied = appliedVersions(database);
     for (const migration of migrationFiles()) {

@@ -4,7 +4,12 @@ import { migrate } from './db/migrate.js';
 
 export function createApp({ databasePath }) {
   const database = openDatabase({ databasePath });
-  migrate(database);
+  try {
+    migrate(database);
+  } catch (error) {
+    database.close();
+    throw error;
+  }
   const server = createServer((request, response) => {
     if (request.method === 'GET' && request.url === '/api/v1/health') {
       response.writeHead(200, { 'content-type': 'application/json' });
