@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
 import { createChapterRepository } from './chapters/chapter-repository.js';
 import { openDatabase } from './db/database.js';
 import { migrate } from './db/migrate.js';
@@ -6,6 +7,21 @@ import { createRouter } from './http/router.js';
 import { createNovelRepository } from './novels/novel-repository.js';
 import { createProgressRepository } from './reading/progress-repository.js';
 import { createLibraryService } from './services/library-service.js';
+
+const browserAssets = new Map([
+  ['/', { path: new URL('../public/index.html', import.meta.url), type: 'text/html; charset=utf-8' }],
+  ['/app.js', { path: new URL('../public/app.js', import.meta.url), type: 'text/javascript; charset=utf-8' }],
+  ['/styles.css', { path: new URL('../public/styles.css', import.meta.url), type: 'text/css; charset=utf-8' }]
+]);
+
+async function serveBrowserAsset(request, response) {
+  if (request.method !== 'GET') return false;
+  const asset = browserAssets.get(new URL(request.url ?? '/', 'http://localhost').pathname);
+  if (!asset) return false;
+  response.writeHead(200, { 'content-type': asset.type });
+  response.end(await readFile(asset.path));
+  return true;
+}
 
 export function createApp({ databasePath }) {
   const database = openDatabase({ databasePath });
@@ -21,7 +37,11 @@ export function createApp({ databasePath }) {
     chapters: createChapterRepository(database, clock),
     progress: createProgressRepository(database, clock)
   };
-  const server = createServer(createRouter(createLibraryService(repositories)));
+  const router = createRouter(createLibraryService(repositories));
+  const server = createServer(async (request, response) => {
+    if (await serveBrowserAsset(request, response)) return;
+    await router(request, response);
+  });
 
   return {
     server,
