@@ -154,3 +154,6 @@ data/
 *.sqlite-shm
 *.sqlite-wal
 exports/
+
+# Isolated implementation worktrees
+.worktrees/
