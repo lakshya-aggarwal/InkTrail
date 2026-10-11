@@ -2,26 +2,26 @@
 
 ## Foundation
 
-Create the documentation baseline, SQLite migrations, local data boundaries,
-and the approved reader shell.
+Complete. The documentation baseline, SQLite migrations, local data boundaries,
+API contract, persistence checks, and approved reader shell passed accepted
+validation on 2026-10-11. See the [foundation review](../reviews/2026-10-11-foundation-review.md).
 
-## Translation Core
+## Next Plan Boundaries
 
-Add one source adapter, local Ollama translation, source provenance, quality
-checks, and current translation revisions.
+1. Source resolution and chapter extraction: add `novel_sources` and
+   `chapter_sources`, migrate one adapter with fixture-based parsing, and route
+   discovered chapters through `recordChapter`.
 
-## Reliable Background Work
+2. Chinese translation and consistency: add provider, quality, feedback, and
+   memory modules that append `translation_revisions` rather than altering the
+   reader contract.
 
-Add persisted jobs, retry and pause behavior, read-ahead, consistency memory,
-and reader feedback verification.
+3. Durable jobs and EPUB: add job and export schema migrations, then connect
+   source and translation stages to persisted retries, prefetch, pause/resume,
+   recovery, and ordered EPUB snapshots.
 
-## Export And Migration
-
-Add resumable EPUB snapshots and the opt-in importer for legacy reader data.
-
-## Expansion
-
-Add remaining source adapters through independent, tested migration slices.
+4. Additional adapters and legacy import: migrate source sites one at a time and
+   build the opt-in, read-only JSON importer with duplicate review reporting.
 
 ## Deferred
 
