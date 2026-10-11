@@ -1,0 +1,344 @@
+openapi: 3.0.3
+info:
+  title: InkTrail Foundation API
+  version: 1.0.0
+  description: Local-first novel library and reader API.
+servers:
+  - url: http://127.0.0.1:4177
+security: []
+paths:
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      summary: Check service health
+      responses:
+        '200':
+          description: Service is available
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /api/v1/novels:
+    get:
+      operationId: listNovels
+      summary: List novels
+      responses:
+        '200':
+          description: Novel library
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/NovelDetail'
+    post:
+      operationId: createNovel
+      summary: Create a novel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateNovelInput'
+            example:
+              title: Return of the War God
+              sourceUrl: https://example.test/book/war-god
+      responses:
+        '201':
+          description: Novel created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Novel'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+  /api/v1/novels/{novelId}:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+    get:
+      operationId: getNovel
+      summary: Get a novel and its reading progress
+      responses:
+        '200':
+          description: Novel detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NovelDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/novels/{novelId}/chapters:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+    post:
+      operationId: recordChapter
+      summary: Record a chapter
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateChapterInput'
+            example:
+              chapterNumber: 1
+              title: Arrival
+              originalText: Original Chinese
+      responses:
+        '201':
+          description: Chapter recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Chapter'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+  /api/v1/novels/{novelId}/chapters/{chapterNumber}:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+      - $ref: '#/components/parameters/ChapterNumber'
+    get:
+      operationId: getReaderChapter
+      summary: Get a reader chapter
+      responses:
+        '200':
+          description: Reader chapter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReaderChapter'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/novels/{novelId}/reading-progress:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+    patch:
+      operationId: setReadingProgress
+      summary: Set reading progress
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetReadingProgressInput'
+            example:
+              chapterNumber: 1
+      responses:
+        '200':
+          description: Reading progress saved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [readingProgress]
+                properties:
+                  readingProgress:
+                    $ref: '#/components/schemas/ReadingProgress'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+components:
+  parameters:
+    NovelId:
+      name: novelId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    ChapterNumber:
+      name: chapterNumber
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+  responses:
+    ValidationError:
+      description: Invalid request data or malformed JSON
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnsupportedMediaType:
+      description: Request body is not JSON
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Requested novel or chapter does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: A chapter with this number already exists for the novel
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    CreateNovelInput:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+        sourceUrl:
+          type: string
+          format: uri
+    CreateChapterInput:
+      type: object
+      required: [chapterNumber, title, originalText]
+      properties:
+        chapterNumber:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+        originalText:
+          type: string
+          minLength: 1
+        sourceUrl:
+          type: string
+          format: uri
+    SetReadingProgressInput:
+      type: object
+      required: [chapterNumber]
+      properties:
+        chapterNumber:
+          type: integer
+          minimum: 1
+    Novel:
+      type: object
+      required: [id, title, sourceUrl, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        sourceUrl:
+          type: string
+          format: uri
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    NovelDetail:
+      allOf:
+        - $ref: '#/components/schemas/Novel'
+        - type: object
+          required: [readingProgress]
+          properties:
+            readingProgress:
+              type: object
+              allOf:
+                - $ref: '#/components/schemas/ReadingProgress'
+              nullable: true
+    Chapter:
+      type: object
+      required: [id, novelId, chapterNumber, title, originalText, sourceUrl, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        novelId:
+          type: string
+          format: uuid
+        chapterNumber:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+        originalText:
+          type: string
+        sourceUrl:
+          type: string
+          format: uri
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+    ReaderChapter:
+      allOf:
+        - $ref: '#/components/schemas/Chapter'
+        - type: object
+          required: [translatedText, provider, model, revision, previousChapterNumber, nextChapterNumber]
+          properties:
+            translatedText:
+              type: string
+              nullable: true
+            provider:
+              type: string
+              nullable: true
+            model:
+              type: string
+              nullable: true
+            revision:
+              type: integer
+              nullable: true
+            previousChapterNumber:
+              type: integer
+              nullable: true
+            nextChapterNumber:
+              type: integer
+              nullable: true
+    ReadingProgress:
+      type: object
+      required: [novelId, chapterNumber, updatedAt]
+      properties:
+        novelId:
+          type: string
+          format: uuid
+        chapterNumber:
+          type: integer
+          minimum: 1
+        updatedAt:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, retryable]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            retryable:
+              type: boolean
+            resourceId:
+              type: string
