@@ -1,5 +1,7 @@
 # Implementation Plans
 
-No implementation plan exists yet. The multi-novel design specification is
-awaiting review. After approval, the implementation plan will define the first
-repository migration slice and its validation steps.
+- [Foundation and reader shell](../superpowers/plans/2026-10-11-inktrail-foundation.md)
+
+The foundation plan is the first delivery slice. It establishes a real,
+persisted multi-novel library and reader before source extraction, translation,
+background jobs, or EPUB work are migrated.
