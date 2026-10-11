@@ -1,6 +1,10 @@
 import { createServer } from 'node:http';
+import { openDatabase } from './db/database.js';
+import { migrate } from './db/migrate.js';
 
 export function createApp({ databasePath }) {
+  const database = openDatabase({ databasePath });
+  migrate(database);
   const server = createServer((request, response) => {
     if (request.method === 'GET' && request.url === '/api/v1/health') {
       response.writeHead(200, { 'content-type': 'application/json' });
@@ -18,5 +22,15 @@ export function createApp({ databasePath }) {
     }));
   });
 
-  return { server, close: () => new Promise((resolve) => server.close(resolve)) };
+  return {
+    server,
+    close: () => new Promise((resolve, reject) => server.close((error) => {
+      database.close();
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    }))
+  };
 }
