@@ -147,3 +147,10 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# InkTrail local state and generated exports
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+exports/
