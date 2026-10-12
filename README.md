@@ -19,6 +19,8 @@ remains separate and unchanged during migration.
 - [Design review](docs/reviews/2026-10-11-design-spec-self-review.md)
 - [Foundation review](docs/reviews/2026-10-11-foundation-review.md)
 
-The foundation is complete following its accepted test, browser, OpenAPI, and
-persistence validation. The next plan begins with source resolution and
-chapter extraction.
+The foundation is complete following `pnpm test`, `pnpm exec playwright test`,
+`pnpm exec redocly lint openapi/inktrail.v1.yaml`, and persistence validation.
+The Redocly command uses its executable name, correcting the plan's scoped
+package-name spelling. The next plan begins with source resolution and chapter
+extraction.

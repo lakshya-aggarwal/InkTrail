@@ -3,8 +3,11 @@
 ## Foundation
 
 Complete. The documentation baseline, SQLite migrations, local data boundaries,
-API contract, persistence checks, and approved reader shell passed accepted
-validation on 2026-10-11. See the [foundation review](../reviews/2026-10-11-foundation-review.md).
+API contract, persistence checks, and approved reader shell passed the recorded
+unit, browser, and OpenAPI commands on 2026-10-11. The Redocly command is
+`pnpm exec redocly lint openapi/inktrail.v1.yaml`, correcting the plan's
+package-name spelling to its executable name. See the [foundation
+review](../reviews/2026-10-11-foundation-review.md).
 
 ## Next Plan Boundaries
 
