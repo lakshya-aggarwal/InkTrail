@@ -54,17 +54,11 @@ test('ignores nested-template decoys and preserves rendered narrative Chinese fr
   });
 });
 
-test('falls back to rendered div, br, and li story text while excluding marked boilerplate', () => {
-  const chapter = parseKujiangChapterHtml(`
-    <h1 data-chapter-title>第2491章</h1>
-    <article data-chapter-content>
-      <div>第一段<br>第二行</div>
-      <li>第三段</li>
-      <div class="chapter-boilerplate">加入书架后继续阅读</div>
-    </article>
-  `, chapterUrl);
+test('excludes a marked wrapper and falls back to rendered div and br story text', async () => {
+  const html = await readFile(new URL('../fixtures/kujiang/div-fallback.html', import.meta.url), 'utf8');
+  const chapter = parseKujiangChapterHtml(html, chapterUrl);
 
-  assert.deepEqual(chapter.paragraphs, ['第一段', '第二行', '第三段']);
+  assert.deepEqual(chapter.paragraphs, ['真正正文', '第二行正文']);
 });
 
 test('rejects malformed content that has no Chinese story paragraph', () => {
