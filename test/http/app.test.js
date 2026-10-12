@@ -56,6 +56,34 @@ test('novel, chapter, and reading-progress routes preserve library state', async
   assert.deepEqual(storedNovel.body.readingProgress, progress.body.readingProgress);
 });
 
+test('reading progress rejects missing and cross-novel chapters without changing progress', async () => {
+  const novel = await requestJson(app, 'POST', '/api/v1/novels', { title: 'Return of the War God' });
+  const otherNovel = await requestJson(app, 'POST', '/api/v1/novels', { title: 'Other Novel' });
+  await requestJson(app, 'POST', `/api/v1/novels/${novel.body.id}/chapters`, {
+    chapterNumber: 1,
+    title: 'Arrival',
+    originalText: 'Original Chinese'
+  });
+  await requestJson(app, 'POST', `/api/v1/novels/${otherNovel.body.id}/chapters`, {
+    chapterNumber: 2,
+    title: 'Elsewhere',
+    originalText: 'Other text'
+  });
+  await requestJson(app, 'PATCH', `/api/v1/novels/${novel.body.id}/reading-progress`, { chapterNumber: 1 });
+
+  const missing = await requestJson(app, 'PATCH', `/api/v1/novels/${novel.body.id}/reading-progress`, { chapterNumber: 3 });
+  const crossNovel = await requestJson(app, 'PATCH', `/api/v1/novels/${novel.body.id}/reading-progress`, { chapterNumber: 2 });
+  const storedNovel = await requestJson(app, 'GET', `/api/v1/novels/${novel.body.id}`);
+
+  for (const response of [missing, crossNovel]) {
+    assert.deepEqual(response, {
+      status: 404,
+      body: { error: { code: 'not_found', message: 'chapter not found', retryable: false, resourceId: novel.body.id } }
+    });
+  }
+  assert.equal(storedNovel.body.readingProgress.chapterNumber, 1);
+});
+
 test('a duplicate chapter request returns conflict without replacing the original', async () => {
   const novel = await requestJson(app, 'POST', '/api/v1/novels', { title: 'Return of the War God' });
   const first = await requestJson(app, 'POST', `/api/v1/novels/${novel.body.id}/chapters`, {

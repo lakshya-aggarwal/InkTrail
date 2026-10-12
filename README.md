@@ -24,3 +24,9 @@ The foundation is complete following `pnpm test`, `pnpm exec playwright test`,
 The Redocly command uses its executable name, correcting the plan's scoped
 package-name spelling. The next plan begins with source resolution and chapter
 extraction.
+
+## Run locally
+
+`pnpm start` listens on `http://127.0.0.1:4277` by default, leaving the legacy
+WebNovels app on `4177` untouched. Set `PORT` to use another valid port, for
+example `PORT=4278 pnpm start`.

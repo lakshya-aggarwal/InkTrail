@@ -31,6 +31,7 @@ function toProgress(row) {
 
 export function createProgressRepository(database, clock) {
   const novelExists = database.prepare('select 1 from novels where id = ?');
+  const chapterExists = database.prepare('select 1 from chapters where novel_id = ? and chapter_number = ?');
   const saveProgress = database.prepare(`
     insert into reading_progress (novel_id, chapter_number, updated_at)
     values (@novelId, @chapterNumber, @updatedAt)
@@ -54,6 +55,9 @@ export function createProgressRepository(database, clock) {
         chapterNumber: requireChapterNumber(chapterNumber),
         updatedAt: clock().toISOString()
       };
+      if (!chapterExists.get(progress.novelId, progress.chapterNumber)) {
+        throw new NotFoundError('chapter not found');
+      }
       saveProgress.run(progress);
       return progress;
     },

@@ -17,7 +17,7 @@ pnpm exec redocly lint openapi/inktrail.v1.yaml
 
 Results:
 
-- `pnpm test`: PASS - 18 tests passed, 0 failed. The test command is scoped to
+- `pnpm test`: PASS - 20 tests passed, 0 failed. The test command is scoped to
   `test/**/*.test.js`, preventing Node's runner from loading Playwright
   `*.spec.js` files.
 - `pnpm exec playwright test`: PASS - 8 tests passed across
@@ -33,12 +33,13 @@ the installed package exposes `redocly` and `openapi` binaries.
 
 ### Browser Suite
 
-The checked-in `playwright.config.js` uses `http://127.0.0.1:4277` for the
-browser base URL and health check, and starts the test server with
+The checked-in `src/server.js` and OpenAPI server URL use
+`http://127.0.0.1:4277` by default, leaving port `4177` for the unrelated
+WebNovels process. A valid `PORT` override remains supported. The checked-in
+`playwright.config.js` uses the same `4277` URL for its browser base URL and
+health check, and starts the test server with
 `PORT=4277 INKTRAIL_DATA_DIR=.test-data node src/server.js`. This is the
-configuration used by the passing `pnpm exec playwright test` command. Port
-`4177` remains owned by the unrelated WebNovels process and was not stopped or
-reconfigured.
+configuration used by the passing `pnpm exec playwright test` command.
 
 Task 5 screenshot evidence remains preserved outside this worktree as earlier
 visual-review evidence. It was captured with that task's temporary environment
@@ -122,9 +123,10 @@ those results using `/private/tmp/inktrail-restart.onwYGQ`.
 
 ## Scope And Legacy Repository
 
-This review changes documentation and Playwright test configuration only. It
-does not add source adapters, translation providers, consistency memory,
-durable jobs, EPUB export, or legacy import behavior.
+This repair validates reading progress against stored per-novel chapters and
+aligns the normal server default with the isolated browser suite port. It does
+not add source adapters, translation providers, consistency memory, durable
+jobs, EPUB export, or legacy import behavior.
 
 The legacy repository at `/Users/lakshya/Documents/Books/WebNovels` was
 untouched by this foundation work and review. Its existing unrelated working
