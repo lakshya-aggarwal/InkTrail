@@ -264,6 +264,7 @@ export function parseKujiangChapterHtml(html, sourceUrl) {
   return {
     site: SITE,
     ...ids,
+    novelSourceUrl: `https://www.kujiang.com/book/${ids.externalNovelId}`,
     sourceUrl: normalizedUrl,
     normalizedUrl,
     title: sourceTitle,

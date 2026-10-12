@@ -13,6 +13,7 @@ import { createSourceImportService } from '../../src/sources/source-import-servi
 import { createSourceRepository } from '../../src/sources/source-repository.js';
 
 const chapterUrl = 'https://www.kujiang.com/book/9/906595';
+const nextChapterUrl = 'https://www.kujiang.com/book/9/906596';
 const fixturePath = new URL('../fixtures/kujiang/chapter.html', import.meta.url);
 const clock = () => new Date('2026-10-12T00:00:00.000Z');
 
@@ -85,6 +86,28 @@ test('re-importing unchanged source content is idempotent', async (t) => {
 
   assert.deepEqual(second, first);
   assert.deepEqual(tableCounts(repositories.database), { chapters: 1, novel_sources: 1, chapter_sources: 1 });
+});
+
+test('imports distinct chapters from one source novel with shared book provenance', async (t) => {
+  const repositories = createRepositories();
+  t.after(() => repositories.database.close());
+  const novel = repositories.novels.createNovel({ title: 'Ink Trail' });
+  const service = createService(repositories, async () => new Response(await chapterHtml(), {
+    headers: { 'content-type': 'text/html' }
+  }));
+
+  await service.importChapter({ novelId: novel.id, sourceUrl: chapterUrl, chapterNumber: 1 });
+  const second = await service.importChapter({ novelId: novel.id, sourceUrl: nextChapterUrl, chapterNumber: 2 });
+
+  assert.equal(second.chapter.chapterNumber, 2);
+  assert.equal(second.source.sourceUrl, nextChapterUrl);
+  assert.deepEqual(tableCounts(repositories.database), { chapters: 2, novel_sources: 1, chapter_sources: 2 });
+  assert.deepEqual(repositories.database.prepare(`
+    select source_url, normalized_url from novel_sources where novel_id = ?
+  `).all(novel.id).map((row) => ({ ...row })), [{
+    source_url: 'https://www.kujiang.com/book/9',
+    normalized_url: 'https://www.kujiang.com/book/9'
+  }]);
 });
 
 test('rolls back provenance when the requested reader chapter number already exists', async (t) => {

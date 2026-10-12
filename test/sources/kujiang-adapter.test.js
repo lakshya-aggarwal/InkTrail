@@ -40,6 +40,7 @@ test('ignores nested-template decoys and preserves rendered narrative Chinese fr
     site: 'kujiang',
     externalNovelId: '9',
     externalChapterId: '906595',
+    novelSourceUrl: 'https://www.kujiang.com/book/9',
     sourceUrl: chapterUrl,
     normalizedUrl: chapterUrl,
     title: '第2491章 归途 & 灯火',

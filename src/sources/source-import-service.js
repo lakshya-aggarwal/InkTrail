@@ -78,8 +78,8 @@ export function createSourceImportService({ database, repositories, adapterRegis
           novelId,
           site: sourceChapter.site,
           externalNovelId: sourceChapter.externalNovelId,
-          sourceUrl: sourceChapter.sourceUrl,
-          normalizedUrl: sourceChapter.normalizedUrl,
+          sourceUrl: sourceChapter.novelSourceUrl,
+          normalizedUrl: sourceChapter.novelSourceUrl,
           title: novel.title
         });
         const chapter = repositories.chapters.recordChapter({
