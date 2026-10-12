@@ -2,6 +2,14 @@
 <html lang="zh-CN">
   <head>
     <title>页面镀铬标题</title>
+    <script>
+      const cached = '<article data-chapter-content><p>脚本里的假正文。</p></article>';
+    </script>
+    <style>
+      .cached::before { content: '<article data-chapter-content><p>样式里的假正文。</p></article>'; }
+    </style>
+    <template><article data-chapter-content><p>模板里的假正文。</p></article></template>
+    <!-- <article data-chapter-content><p>注释里的假正文。</p></article> -->
   </head>
   <body>
     <header>
@@ -13,8 +21,9 @@
       <article data-chapter-content>
         <p>夜色落在城墙上，远处的灯火仍未熄灭。</p>
         <p>他抬起头<br>看见了归来的路。</p>
-        <p>本章未完，请点击下一页继续阅读。</p>
-        <p>加入书架，方便下次阅读。</p>
+        <p>她说上一章的旧书里夹着一张加入书架的便签。</p>
+        <p class="chapter-boilerplate">本章未完，请点击下一页继续阅读。</p>
+        <p data-chapter-boilerplate>加入书架，方便下次阅读。</p>
       </article>
       <nav data-chapter-navigation>
         <a rel="prev" href="/book/9/906594">上一章</a>

@@ -76,6 +76,12 @@ function textFromHtml(fragment) {
     .trim();
 }
 
+function renderedHtml(html) {
+  return html
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(script|style|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
+}
+
 function canonicalNavigationUrl(value, baseUrl) {
   if (typeof value !== 'string' || value.length === 0) {
     return null;
@@ -128,7 +134,43 @@ function chapterNavigationElement(html) {
 }
 
 function isChineseStoryParagraph(paragraph) {
-  return /[\u3400-\u9fff]/.test(paragraph) && !/(?:本章未完|上一章|下一章|返回目录|加入书架|章节错误|手机阅读|点击.*(?:下一页|阅读))/.test(paragraph);
+  return /[\u3400-\u9fff]/.test(paragraph);
+}
+
+function storyParagraphs(content) {
+  const paragraphs = [];
+  const elements = /<p\b([^>]*)>([\s\S]*?)<\/p\s*>/gi;
+  for (const element of content.matchAll(elements)) {
+    const attributes = attributesFrom(element[1]);
+    if ('data-chapter-boilerplate' in attributes || classes(attributes).has('chapter-boilerplate')) {
+      continue;
+    }
+    paragraphs.push(...textFromHtml(element[2]).split('\n'));
+  }
+  return paragraphs.filter(isChineseStoryParagraph);
+}
+
+function readChunk(reader, signal) {
+  if (signal.aborted) {
+    return Promise.reject(new DOMException('Aborted', 'AbortError'));
+  }
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      reader.cancel().catch(() => {});
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    reader.read().then(
+      (result) => {
+        signal.removeEventListener('abort', abort);
+        resolve(result);
+      },
+      (error) => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      }
+    );
+  });
 }
 
 export function canonicalizeKujiangUrl(value) {
@@ -156,8 +198,9 @@ export function parseKujiangChapterHtml(html, sourceUrl) {
     throw new Error('source HTML must be text');
   }
 
-  const content = chapterContentElement(html);
-  const title = chapterTitleElement(html);
+  const visibleHtml = renderedHtml(html);
+  const content = chapterContentElement(visibleHtml);
+  const title = chapterTitleElement(visibleHtml);
   if (!content || !title) {
     throw new Error('source HTML is missing chapter content or title');
   }
@@ -165,11 +208,11 @@ export function parseKujiangChapterHtml(html, sourceUrl) {
   if (!sourceTitle) {
     throw new Error('source HTML is missing a chapter title');
   }
-  const paragraphs = textFromHtml(content.content).split('\n').filter(isChineseStoryParagraph);
+  const paragraphs = storyParagraphs(content.content);
   if (paragraphs.length === 0) {
     throw new Error('source HTML has no Chinese story paragraphs');
   }
-  const navigation = chapterNavigationElement(html);
+  const navigation = chapterNavigationElement(visibleHtml);
   const ids = chapterIds(normalizedUrl);
 
   return {
@@ -184,7 +227,7 @@ export function parseKujiangChapterHtml(html, sourceUrl) {
   };
 }
 
-async function readHtmlBody(response, maxBodyBytes) {
+async function readHtmlBody(response, maxBodyBytes, signal) {
   const contentLength = Number.parseInt(response.headers?.get?.('content-length') ?? '', 10);
   if (Number.isInteger(contentLength) && contentLength > maxBodyBytes) {
     throw new Error('source response exceeds body limit');
@@ -202,7 +245,7 @@ async function readHtmlBody(response, maxBodyBytes) {
   let totalBytes = 0;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readChunk(reader, signal);
       if (done) {
         break;
       }
@@ -231,37 +274,38 @@ async function fetchHtml(fetchClient, normalizedUrl, timeoutMs, maxBodyBytes) {
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    let response;
     try {
-      response = await fetchClient(currentUrl, {
-        headers: { accept: 'text/html' },
-        redirect: 'manual',
-        signal: controller.signal
-      });
-    } catch (error) {
-      throw new SourceFetchError('Kujiang source request failed', { cause: error });
+      let response;
+      try {
+        response = await fetchClient(currentUrl, {
+          headers: { accept: 'text/html' },
+          redirect: 'manual',
+          signal: controller.signal
+        });
+      } catch (error) {
+        throw new SourceFetchError('Kujiang source request failed', { cause: error });
+      }
+      if (REDIRECT_STATUSES.has(response?.status)) {
+        const redirectedUrl = canonicalNavigationUrl(response.headers?.get?.('location'), currentUrl);
+        if (!redirectedUrl || redirects === MAX_REDIRECTS) {
+          throw new SourceFetchError('Kujiang source redirect was rejected');
+        }
+        currentUrl = redirectedUrl;
+        continue;
+      }
+      if (!response?.ok) {
+        throw new SourceFetchError('Kujiang source returned an unsuccessful response');
+      }
+      if (!response.headers?.get?.('content-type')?.toLowerCase().includes('text/html')) {
+        throw new SourceFetchError('Kujiang source returned non-HTML content');
+      }
+      try {
+        return await readHtmlBody(response, maxBodyBytes, controller.signal);
+      } catch (error) {
+        throw new SourceFetchError('Kujiang source response could not be read', { cause: error });
+      }
     } finally {
       clearTimeout(timeout);
-    }
-
-    if (REDIRECT_STATUSES.has(response?.status)) {
-      const redirectedUrl = canonicalNavigationUrl(response.headers?.get?.('location'), currentUrl);
-      if (!redirectedUrl || redirects === MAX_REDIRECTS) {
-        throw new SourceFetchError('Kujiang source redirect was rejected');
-      }
-      currentUrl = redirectedUrl;
-      continue;
-    }
-    if (!response?.ok) {
-      throw new SourceFetchError('Kujiang source returned an unsuccessful response');
-    }
-    if (!response.headers?.get?.('content-type')?.toLowerCase().includes('text/html')) {
-      throw new SourceFetchError('Kujiang source returned non-HTML content');
-    }
-    try {
-      return await readHtmlBody(response, maxBodyBytes);
-    } catch (error) {
-      throw new SourceFetchError('Kujiang source response could not be read', { cause: error });
     }
   }
   throw new SourceFetchError('Kujiang source redirect limit was reached');

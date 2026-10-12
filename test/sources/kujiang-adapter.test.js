@@ -35,7 +35,7 @@ test('canonicalizes only exact Kujiang chapter URLs', () => {
   }
 });
 
-test('parses bounded Chinese chapter content and source metadata from a static fixture', async () => {
+test('parses only rendered bounded content and preserves narrative Chinese from a static fixture', async () => {
   assert.deepEqual(parseKujiangChapterHtml(await chapterHtml(), chapterUrl), {
     site: 'kujiang',
     externalNovelId: '9',
@@ -46,7 +46,8 @@ test('parses bounded Chinese chapter content and source metadata from a static f
     paragraphs: [
       '夜色落在城墙上，远处的灯火仍未熄灭。',
       '他抬起头',
-      '看见了归来的路。'
+      '看见了归来的路。',
+      '她说上一章的旧书里夹着一张加入书架的便签。'
     ],
     previousSourceUrl: 'https://www.kujiang.com/book/9/906594',
     nextSourceUrl: 'https://www.kujiang.com/book/9/906596'
@@ -82,6 +83,27 @@ test('uses an injected fetch client and requests only canonical HTML', async () 
   assert.equal(calls[0].url, chapterUrl);
   assert.equal(calls[0].options.headers.accept, 'text/html');
   assert.equal(calls[0].options.redirect, 'manual');
+});
+
+test('keeps the request timeout active while a response body stalls', async () => {
+  let cancelled = false;
+  const timeoutMs = 10;
+  const adapter = createKujiangAdapter({
+    fetch: async () => new Response(new ReadableStream({
+      cancel() {
+        cancelled = true;
+      }
+    }), { headers: { 'content-type': 'text/html' } }),
+    timeoutMs
+  });
+  const startedAt = Date.now();
+
+  await assert.rejects(
+    () => adapter.fetchChapter(chapterUrl),
+    (error) => error instanceof SourceFetchError && error.retryable === true
+  );
+  assert.equal(cancelled, true);
+  assert.ok(Date.now() - startedAt < timeoutMs * 10);
 });
 
 test('revalidates redirects before requesting their target', async () => {
