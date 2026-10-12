@@ -3,12 +3,20 @@ import test from 'node:test';
 import { openDatabase } from '../../src/db/database.js';
 import { migrate } from '../../src/db/migrate.js';
 
-test('migration creates novel, chapter, revision, and progress tables', () => {
+test('migration creates library and source provenance tables', () => {
   const database = openDatabase({ databasePath: ':memory:' });
   migrate(database);
   const names = database.prepare("select name from sqlite_master where type = 'table'").all().map(({ name }) => name);
 
-  assert.deepEqual(names.sort(), ['chapters', 'novels', 'reading_progress', 'schema_migrations', 'translation_revisions']);
+  assert.deepEqual(names.sort(), [
+    'chapter_sources',
+    'chapters',
+    'novel_sources',
+    'novels',
+    'reading_progress',
+    'schema_migrations',
+    'translation_revisions'
+  ]);
 });
 
 test('a chapter number is unique only within its novel', () => {
@@ -23,13 +31,51 @@ test('a chapter number is unique only within its novel', () => {
   assert.equal(database.prepare('select count(*) as count from chapters where chapter_number = 1').get().count, 2);
 });
 
-test('migration is recorded once and foreign keys are enforced', () => {
+test('migrations are recorded once and source foreign keys are enforced', () => {
   const database = openDatabase({ databasePath: ':memory:' });
   migrate(database);
   migrate(database);
 
-  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 1);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 2);
   assert.throws(() => database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'missing-novel', 1, 'One', '2026-10-11T00:00:00.000Z'));
+  assert.throws(() => database.prepare(`
+    insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
+    values ('source-a', 'missing-novel', 'kujiang', '9', 'https://www.kujiang.com/book/9', 'https://www.kujiang.com/book/9', '2026-10-12T00:00:00.000Z', '2026-10-12T00:00:00.000Z')
+  `).run());
+  assert.throws(() => database.prepare(`
+    insert into chapter_sources (id, novel_id, chapter_id, novel_source_id, site, external_chapter_id, source_url, normalized_url, source_title, fetched_at, content_sha256, created_at)
+    values ('chapter-source-a', 'missing-novel', 'missing-chapter', 'missing-source', 'kujiang', '906595', 'https://www.kujiang.com/book/9/906595', 'https://www.kujiang.com/book/9/906595', 'One', '2026-10-12T00:00:00.000Z', 'hash-a', '2026-10-12T00:00:00.000Z')
+  `).run());
+});
+
+test('source site identities are unique', () => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  migrate(database);
+  const now = '2026-10-12T00:00:00.000Z';
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-b', 'B', now, now);
+  database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'novel-a', 1, 'One', now);
+  database.prepare(`
+    insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
+    values ('source-a', 'novel-a', 'kujiang', '9', 'https://www.kujiang.com/book/9', 'https://www.kujiang.com/book/9', ?, ?)
+  `).run(now, now);
+  assert.throws(() => database.prepare(`
+    insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
+    values ('source-b', 'novel-a', 'kujiang', '9', 'https://www.kujiang.com/book/9/other', 'https://www.kujiang.com/book/9/other', ?, ?)
+  `).run(now, now));
+  database.prepare(`
+    insert into chapter_sources (id, novel_id, chapter_id, novel_source_id, site, external_chapter_id, source_url, normalized_url, source_title, fetched_at, content_sha256, created_at)
+    values ('chapter-source-a', 'novel-a', 'chapter-a', 'source-a', 'kujiang', '906595', 'https://www.kujiang.com/book/9/906595', 'https://www.kujiang.com/book/9/906595', 'One', ?, 'hash-a', ?)
+  `).run(now, now);
+  database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-b', 'novel-b', 1, 'One', now);
+  database.prepare(`
+    insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
+    values ('source-b', 'novel-b', 'kujiang', '10', 'https://www.kujiang.com/book/10', 'https://www.kujiang.com/book/10', ?, ?)
+  `).run(now, now);
+  assert.throws(() => database.prepare(`
+    insert into chapter_sources (id, novel_id, chapter_id, novel_source_id, site, external_chapter_id, source_url, normalized_url, source_title, fetched_at, content_sha256, created_at)
+    values ('chapter-source-b', 'novel-b', 'chapter-b', 'source-b', 'kujiang', '906595', 'https://www.kujiang.com/book/10/906595', 'https://www.kujiang.com/book/10/906595', 'One', ?, 'hash-a', ?)
+  `).run(now, now));
 });
 
 test('migration acquires an immediate transaction before schema work', () => {
