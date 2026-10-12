@@ -7,7 +7,7 @@ import {
   createKujiangAdapter,
   parseKujiangChapterHtml
 } from '../../src/sources/kujiang-adapter.js';
-import { SourceFetchError } from '../../src/sources/source-errors.js';
+import { SourceFetchError } from '../../src/domain/errors.js';
 
 const chapterUrl = 'https://www.kujiang.com/book/9/906595';
 const fixturePath = new URL('../fixtures/kujiang/chapter.html', import.meta.url);

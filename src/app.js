@@ -7,6 +7,10 @@ import { createRouter } from './http/router.js';
 import { createNovelRepository } from './novels/novel-repository.js';
 import { createProgressRepository } from './reading/progress-repository.js';
 import { createLibraryService } from './services/library-service.js';
+import { createAdapterRegistry } from './sources/adapter-registry.js';
+import { createKujiangAdapter } from './sources/kujiang-adapter.js';
+import { createSourceImportService } from './sources/source-import-service.js';
+import { createSourceRepository } from './sources/source-repository.js';
 
 const browserAssets = new Map([
   ['/', { path: new URL('../public/index.html', import.meta.url), type: 'text/html; charset=utf-8' }],
@@ -23,7 +27,7 @@ async function serveBrowserAsset(request, response) {
   return true;
 }
 
-export function createApp({ databasePath }) {
+export function createApp({ databasePath, fetch = globalThis.fetch }) {
   const database = openDatabase({ databasePath });
   try {
     migrate(database);
@@ -35,8 +39,15 @@ export function createApp({ databasePath }) {
   const repositories = {
     novels: createNovelRepository(database, clock),
     chapters: createChapterRepository(database, clock),
-    progress: createProgressRepository(database, clock)
+    progress: createProgressRepository(database, clock),
+    sources: createSourceRepository(database, clock)
   };
+  const sourceImportService = createSourceImportService({
+    database,
+    repositories,
+    adapterRegistry: createAdapterRegistry([createKujiangAdapter({ fetch })]),
+    clock
+  });
   const router = createRouter(createLibraryService(repositories));
   const server = createServer(async (request, response) => {
     if (await serveBrowserAsset(request, response)) return;
@@ -45,6 +56,7 @@ export function createApp({ databasePath }) {
 
   return {
     server,
+    sourceImportService,
     close: () => new Promise((resolve, reject) => server.close((error) => {
       database.close();
       if (error) {

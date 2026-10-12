@@ -1,4 +1,4 @@
-import { SourceFetchError } from './source-errors.js';
+import { SourceFetchError } from '../domain/errors.js';
 
 const SITE = 'kujiang';
 const DEFAULT_TIMEOUT_MS = 5_000;
