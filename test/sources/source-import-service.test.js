@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createChapterRepository } from '../../src/chapters/chapter-repository.js';
@@ -24,6 +25,19 @@ async function chapterHtml() {
 function createRepositories() {
   const database = openDatabase({ databasePath: ':memory:' });
   migrate(database);
+  return repositoriesForDatabase(database);
+}
+
+function createLegacyRepositories() {
+  const database = openDatabase({ databasePath: ':memory:' });
+  database.exec(readFileSync(new URL('../../src/db/migrations/001-library.sql', import.meta.url), 'utf8'));
+  database.exec(readFileSync(new URL('../../src/db/migrations/002-sources.sql', import.meta.url), 'utf8'));
+  database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(1, '2026-10-12T00:00:00.000Z');
+  database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(2, '2026-10-12T00:00:00.000Z');
+  return repositoriesForDatabase(database);
+}
+
+function repositoriesForDatabase(database) {
   return {
     database,
     novels: createNovelRepository(database, clock),
@@ -108,6 +122,75 @@ test('imports distinct chapters from one source novel with shared book provenanc
     source_url: 'https://www.kujiang.com/book/9',
     normalized_url: 'https://www.kujiang.com/book/9'
   }]);
+});
+
+test('migrates 83de539 chapter-level provenance before importing the next chapter', async (t) => {
+  const repositories = createLegacyRepositories();
+  t.after(() => repositories.database.close());
+  const novel = repositories.novels.createNovel({ title: 'Ink Trail' });
+  const otherNovel = repositories.novels.createNovel({ title: 'Other source' });
+  const firstChapter = repositories.chapters.recordChapter({
+    novelId: novel.id,
+    chapterNumber: 1,
+    title: 'First',
+    originalText: 'First source text',
+    sourceUrl: chapterUrl
+  });
+  const legacyNovelSource = repositories.sources.createOrGetNovelSource({
+    novelId: novel.id,
+    site: 'kujiang',
+    externalNovelId: '9',
+    sourceUrl: chapterUrl,
+    normalizedUrl: chapterUrl,
+    title: novel.title
+  });
+  repositories.sources.createChapterSource({
+    novelId: novel.id,
+    chapterId: firstChapter.id,
+    novelSourceId: legacyNovelSource.id,
+    site: 'kujiang',
+    externalChapterId: '906595',
+    sourceUrl: chapterUrl,
+    normalizedUrl: chapterUrl,
+    sourceTitle: 'First',
+    previousSourceUrl: null,
+    nextSourceUrl: nextChapterUrl,
+    fetchedAt: '2026-10-12T00:00:00.000Z',
+    contentSha256: 'legacy-hash'
+  });
+  repositories.sources.createOrGetNovelSource({
+    novelId: otherNovel.id,
+    site: 'other',
+    externalNovelId: '1',
+    sourceUrl: 'https://source.example/chapters/1',
+    normalizedUrl: 'https://source.example/chapters/1',
+    title: otherNovel.title
+  });
+
+  migrate(repositories.database);
+  const service = createService(repositories, async () => new Response(await chapterHtml(), {
+    headers: { 'content-type': 'text/html' }
+  }));
+  const second = await service.importChapter({ novelId: novel.id, sourceUrl: nextChapterUrl, chapterNumber: 2 });
+
+  assert.equal(second.source.novelSourceId, legacyNovelSource.id);
+  assert.deepEqual(repositories.database.prepare(`
+    select site, source_url, normalized_url from novel_sources order by site
+  `).all().map((row) => ({ ...row })), [
+    {
+      site: 'kujiang',
+      source_url: 'https://www.kujiang.com/book/9',
+      normalized_url: 'https://www.kujiang.com/book/9'
+    },
+    {
+      site: 'other',
+      source_url: 'https://source.example/chapters/1',
+      normalized_url: 'https://source.example/chapters/1'
+    }
+  ]);
+  assert.equal(repositories.database.prepare(`
+    select count(*) as count from chapter_sources where novel_source_id = ?
+  `).get(legacyNovelSource.id).count, 2);
 });
 
 test('rolls back provenance when the requested reader chapter number already exists', async (t) => {
