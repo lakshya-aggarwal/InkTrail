@@ -150,10 +150,16 @@ vite.config.ts.timestamp-*
 
 # InkTrail local state and generated exports
 data/
+.test-data/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
 exports/
+
+# Playwright output
+playwright-report/
+test-results/
+blob-report/
 
 # Isolated implementation worktrees
 .worktrees/

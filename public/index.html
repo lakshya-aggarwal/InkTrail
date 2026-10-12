@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>InkTrail</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main>
+      <aside aria-label="Your shelf" id="library">
+        <div class="shelf-heading"><p class="eyebrow">InkTrail</p><h2>Your shelf</h2></div>
+        <form id="novel-form">
+          <label for="novel-title">Novel title</label>
+          <div class="novel-form-controls"><input id="novel-title" name="title" required type="text"><button type="submit">Create novel</button></div>
+        </form>
+        <p id="library-status" role="status"></p>
+        <ul aria-label="Novels" id="novel-list"></ul>
+      </aside>
+      <section aria-labelledby="chapter-title" id="reader">
+        <nav aria-label="Chapter navigation" class="chapter-navigation"><button type="button" data-direction="previous" aria-label="Previous chapter">Previous</button><button type="button" data-direction="next" aria-label="Next chapter">Next</button></nav>
+        <p id="chapter-number"></p>
+        <h1 id="chapter-title" tabindex="-1">Choose a novel</h1>
+        <article id="chapter-text"><p>Select a novel from your shelf to begin reading.</p></article>
+        <p id="reader-status" role="alert"></p>
+        <nav aria-label="Chapter navigation at end of chapter" class="chapter-navigation chapter-navigation-end"><button type="button" data-direction="previous" aria-label="Previous chapter">Previous</button><button type="button" data-direction="next" aria-label="Next chapter">Next</button></nav>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
