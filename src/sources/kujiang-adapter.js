@@ -76,10 +76,30 @@ function textFromHtml(fragment) {
     .trim();
 }
 
+function withoutNestedElements(html, tag) {
+  const elements = new RegExp(`</?${tag}\\b[^>]*>`, 'gi');
+  let depth = 0;
+  let kept = '';
+  let cursor = 0;
+  for (const element of html.matchAll(elements)) {
+    if (element[0].startsWith('</')) {
+      if (depth > 0 && --depth === 0) {
+        cursor = element.index + element[0].length;
+      }
+    } else if (depth === 0) {
+      kept += html.slice(cursor, element.index);
+      depth = 1;
+    } else {
+      depth += 1;
+    }
+  }
+  return depth === 0 ? kept + html.slice(cursor) : kept;
+}
+
 function renderedHtml(html) {
-  return html
+  return withoutNestedElements(html
     .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<(script|style|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ''), 'template');
 }
 
 function canonicalNavigationUrl(value, baseUrl) {
@@ -137,17 +157,42 @@ function isChineseStoryParagraph(paragraph) {
   return /[\u3400-\u9fff]/.test(paragraph);
 }
 
+function isBoilerplate(attributes) {
+  return 'data-chapter-boilerplate' in attributes || classes(attributes).has('chapter-boilerplate');
+}
+
+function withoutBoilerplate(content) {
+  const elements = /<\/?(p|div|li)\b([^>]*)>/gi;
+  let depth = 0;
+  let kept = '';
+  let cursor = 0;
+  for (const element of content.matchAll(elements)) {
+    if (element[0].startsWith('</')) {
+      if (depth > 0 && --depth === 0) {
+        cursor = element.index + element[0].length;
+      }
+    } else if (depth > 0) {
+      depth += 1;
+    } else if (isBoilerplate(attributesFrom(element[2]))) {
+      kept += content.slice(cursor, element.index);
+      depth = 1;
+    }
+  }
+  return depth === 0 ? kept + content.slice(cursor) : kept;
+}
+
 function storyParagraphs(content) {
   const paragraphs = [];
   const elements = /<p\b([^>]*)>([\s\S]*?)<\/p\s*>/gi;
   for (const element of content.matchAll(elements)) {
     const attributes = attributesFrom(element[1]);
-    if ('data-chapter-boilerplate' in attributes || classes(attributes).has('chapter-boilerplate')) {
+    if (isBoilerplate(attributes)) {
       continue;
     }
     paragraphs.push(...textFromHtml(element[2]).split('\n'));
   }
-  return paragraphs.filter(isChineseStoryParagraph);
+  const story = paragraphs.filter(isChineseStoryParagraph);
+  return story.length > 0 ? story : textFromHtml(withoutBoilerplate(content)).split('\n').filter(isChineseStoryParagraph);
 }
 
 function readChunk(reader, signal) {

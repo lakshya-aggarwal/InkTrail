@@ -35,7 +35,7 @@ test('canonicalizes only exact Kujiang chapter URLs', () => {
   }
 });
 
-test('parses only rendered bounded content and preserves narrative Chinese from a static fixture', async () => {
+test('ignores nested-template decoys and preserves rendered narrative Chinese from a static fixture', async () => {
   assert.deepEqual(parseKujiangChapterHtml(await chapterHtml(), chapterUrl), {
     site: 'kujiang',
     externalNovelId: '9',
@@ -52,6 +52,19 @@ test('parses only rendered bounded content and preserves narrative Chinese from 
     previousSourceUrl: 'https://www.kujiang.com/book/9/906594',
     nextSourceUrl: 'https://www.kujiang.com/book/9/906596'
   });
+});
+
+test('falls back to rendered div, br, and li story text while excluding marked boilerplate', () => {
+  const chapter = parseKujiangChapterHtml(`
+    <h1 data-chapter-title>第2491章</h1>
+    <article data-chapter-content>
+      <div>第一段<br>第二行</div>
+      <li>第三段</li>
+      <div class="chapter-boilerplate">加入书架后继续阅读</div>
+    </article>
+  `, chapterUrl);
+
+  assert.deepEqual(chapter.paragraphs, ['第一段', '第二行', '第三段']);
 });
 
 test('rejects malformed content that has no Chinese story paragraph', () => {

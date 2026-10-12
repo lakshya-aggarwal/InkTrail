@@ -8,7 +8,10 @@
     <style>
       .cached::before { content: '<article data-chapter-content><p>样式里的假正文。</p></article>'; }
     </style>
-    <template><article data-chapter-content><p>模板里的假正文。</p></article></template>
+    <template>
+      <template><article data-chapter-content><p>内层模板里的假正文。</p></article></template>
+      <article data-chapter-content><p>外层模板尾部的假正文。</p></article>
+    </template>
     <!-- <article data-chapter-content><p>注释里的假正文。</p></article> -->
   </head>
   <body>
