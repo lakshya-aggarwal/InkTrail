@@ -62,6 +62,13 @@ test('excludes a marked wrapper and falls back to rendered div and br story text
   assert.deepEqual(chapter.paragraphs, ['真正正文', '第二行正文']);
 });
 
+test('preserves every narrative Chinese block in mixed paragraph markup', async () => {
+  const html = await readFile(new URL('../fixtures/kujiang/mixed-markup.html', import.meta.url), 'utf8');
+  const chapter = parseKujiangChapterHtml(html, chapterUrl);
+
+  assert.deepEqual(chapter.paragraphs, ['第一段正文。', '第二段正文', '第二段续写。', '第三段正文。']);
+});
+
 test('rejects malformed content that has no Chinese story paragraph', () => {
   assert.throws(
     () => parseKujiangChapterHtml('<h1 data-chapter-title>Chapter</h1><article data-chapter-content><p>Read next</p></article>', chapterUrl),

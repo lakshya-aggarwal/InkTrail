@@ -5,14 +5,16 @@ import { startTestApp } from '../support/http.js';
 
 let app;
 const chapterUrl = 'https://www.kujiang.com/book/9/906595';
+const mixedChapterUrl = 'https://www.kujiang.com/book/9/906596';
 const failedChapterUrl = 'https://www.kujiang.com/book/9/906597';
 const fixturePath = new URL('../fixtures/kujiang/chapter.html', import.meta.url);
+const mixedFixturePath = new URL('../fixtures/kujiang/mixed-markup.html', import.meta.url);
 
 async function fixtureFetch(sourceUrl) {
   if (sourceUrl === failedChapterUrl) {
     throw new Error('raw upstream source text must not reach API clients');
   }
-  return new Response(await readFile(fixturePath, 'utf8'), {
+  return new Response(await readFile(sourceUrl === mixedChapterUrl ? mixedFixturePath : fixturePath, 'utf8'), {
     headers: { 'content-type': 'text/html' }
   });
 }
@@ -136,6 +138,20 @@ test('source chapter import returns reader data and is idempotent', async () => 
   assert.equal(first.body.chapter.chapterNumber, 7);
   assert.equal(first.body.chapter.originalText, '夜色落在城墙上，远处的灯火仍未熄灭。\n\n他抬起头\n\n看见了归来的路。\n\n她说上一章的旧书里夹着一张加入书架的便签。');
   assert.equal(first.body.source.sourceUrl, chapterUrl);
+  assert.deepEqual(second.body, first.body);
+});
+
+test('source chapter import preserves mixed markup and remains idempotent', async () => {
+  const novel = await requestJson(app, 'POST', '/api/v1/novels', { title: 'Ink Trail' });
+  const path = `/api/v1/novels/${novel.body.id}/source-chapters`;
+  const input = { sourceUrl: mixedChapterUrl, chapterNumber: 8 };
+
+  const first = await requestJson(app, 'POST', path, input);
+  const second = await requestJson(app, 'POST', path, input);
+
+  assert.equal(first.status, 201);
+  assert.equal(second.status, 200);
+  assert.equal(first.body.chapter.originalText, '第一段正文。\n\n第二段正文\n\n第二段续写。\n\n第三段正文。');
   assert.deepEqual(second.body, first.body);
 });
 

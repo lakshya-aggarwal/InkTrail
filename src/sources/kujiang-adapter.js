@@ -182,18 +182,7 @@ function withoutBoilerplate(content) {
 }
 
 function storyParagraphs(content) {
-  const renderedContent = withoutBoilerplate(content);
-  const paragraphs = [];
-  const elements = /<p\b([^>]*)>([\s\S]*?)<\/p\s*>/gi;
-  for (const element of renderedContent.matchAll(elements)) {
-    const attributes = attributesFrom(element[1]);
-    if (isBoilerplate(attributes)) {
-      continue;
-    }
-    paragraphs.push(...textFromHtml(element[2]).split('\n'));
-  }
-  const story = paragraphs.filter(isChineseStoryParagraph);
-  return story.length > 0 ? story : textFromHtml(renderedContent).split('\n').filter(isChineseStoryParagraph);
+  return textFromHtml(withoutBoilerplate(content)).split('\n').filter(isChineseStoryParagraph);
 }
 
 function readChunk(reader, signal) {

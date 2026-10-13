@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
+    "start:source-fixture": "node scripts/source-fixture-server.js",
     "test": "node --test test/**/*.test.js",
     "test:e2e": "playwright test"
   },

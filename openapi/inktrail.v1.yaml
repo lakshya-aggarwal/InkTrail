@@ -292,6 +292,9 @@ components:
         sourceUrl:
           type: string
           format: uri
+          description: Kujiang chapter URL using HTTPS and the exact `/book/<positive-book-id>/<positive-chapter-id>` path. Query strings and fragments are discarded during canonicalization.
+          pattern: '^https://www\.kujiang\.com/book/[1-9][0-9]*/[1-9][0-9]*(?:[?#].*)?$'
+          example: https://www.kujiang.com/book/9/906595
         chapterNumber:
           type: integer
           minimum: 1
