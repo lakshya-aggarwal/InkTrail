@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createChapterRepository } from '../../src/chapters/chapter-repository.js';
 import { openDatabase } from '../../src/db/database.js';
 import { migrate } from '../../src/db/migrate.js';
-import { TranslationProviderError } from '../../src/domain/errors.js';
+import { ConflictError, TranslationProviderError } from '../../src/domain/errors.js';
 import { createFeedbackRepository } from '../../src/feedback/feedback-repository.js';
 import { createFeedbackVerificationService } from '../../src/feedback/feedback-verification-service.js';
 import { createMemoryRepository } from '../../src/memory/memory-repository.js';
@@ -215,6 +215,35 @@ test('approval appends a correction and updates only the feedback novel memory',
   assert.equal(result.memory.preferredRendering, 'senior brother');
   assert.deepEqual(repositories.chapters.listTranslationRevisions(chapter.id).map(({ translatedText }) => translatedText), ['Original translation', 'Corrected translation']);
   assert.deepEqual(repositories.memory.listVerifiedMemoryEntries(otherNovel.id).map(({ preferredRendering }) => preferredRendering), ['other rendering']);
+});
+
+test('rejects approval for feedback targeting a stale translation revision', (t) => {
+  const { database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'First' });
+  const chapter = seededChapter(repositories, novel, 1);
+  const report = feedbackReport(repositories, novel, chapter);
+  repositories.chapters.addTranslationRevision({
+    chapterId: chapter.id,
+    translatedText: 'Current translation',
+    provider: 'fake',
+    model: 'fake-model'
+  });
+  const verify = createFeedbackVerificationService({ database, repositories });
+
+  assert.throws(
+    () => verify.verifyFeedback({
+      novelId: novel.id,
+      reportId: report.id,
+      status: 'approved',
+      memory: { sourceTerm: '师兄', preferredRendering: 'senior brother', semanticScope: 'ranks', evidence: 'feedback report', confidence: 1 }
+    }),
+    ConflictError
+  );
+  assert.equal(repositories.feedback.listFeedbackReports({ novelId: novel.id, chapterId: chapter.id })[0].status, 'pending');
+  assert.deepEqual(repositories.chapters.listTranslationRevisions(chapter.id).map(({ translatedText }) => translatedText), ['Original translation', 'Current translation']);
+  assert.equal(repositories.chapters.getReaderChapter(novel.id, 1).translatedText, 'Current translation');
+  assert.deepEqual(repositories.memory.listVerifiedMemoryEntries(novel.id), []);
 });
 
 test('approval rolls back when verified memory cannot be stored', (t) => {

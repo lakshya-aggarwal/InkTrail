@@ -30,3 +30,11 @@
 
 - No HTTP routes, OpenAPI, Postman collection, UI, jobs, provider runtime
   composition, dependencies, or live Ollama calls were added.
+
+## Fix Round 1 Evidence
+
+- Approval now compares the feedback report revision with the chapter's current
+  latest revision inside the transaction before changing report status. A stale
+  report raises `ConflictError` with no revision or memory write.
+- Added a regression test covering feedback for revision 1 after revision 2 is
+  appended; the report remains pending and revision 2 remains reader-visible.

@@ -137,6 +137,16 @@ export function createFeedbackRepository(database, clock) {
       return reportsForChapter.all(id, requireChapter(id, chapterId)).map(toFeedbackReport);
     },
 
+    getFeedbackReport(input) {
+      const { novelId, reportId } = requireObject(input);
+      const id = requireNovel(novelId);
+      const report = reportInNovel.get(requireId(reportId, 'reportId'), id);
+      if (!report) {
+        throw new NotFoundError('feedback report not found');
+      }
+      return toFeedbackReport(report);
+    },
+
     updateFeedbackStatus(input) {
       const { novelId, reportId, status } = requireObject(input);
       const id = requireNovel(novelId);
