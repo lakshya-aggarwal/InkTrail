@@ -9,21 +9,26 @@ unit, browser, and OpenAPI commands on 2026-10-11. The Redocly command is
 package-name spelling to its executable name. See the [foundation
 review](../reviews/2026-10-11-foundation-review.md).
 
+## Source Resolution And Chapter Import
+
+Complete. One user-directed Kujiang chapter URL can be fixture-validated,
+fetched under a narrow HTTPS policy, parsed into Chinese source text, and
+persisted with novel and chapter provenance. The endpoint is atomic and
+idempotent, and the reader preserves source Chinese text when no translation
+revision exists. See the [source-resolution
+review](../reviews/2026-10-12-source-resolution-review.md).
+
 ## Next Plan Boundaries
 
-1. Source resolution and chapter extraction: add `novel_sources` and
-   `chapter_sources`, migrate one adapter with fixture-based parsing, and route
-   discovered chapters through `recordChapter`.
-
-2. Chinese translation and consistency: add provider, quality, feedback, and
+1. Chinese translation and consistency: add provider, quality, feedback, and
    memory modules that append `translation_revisions` rather than altering the
    reader contract.
 
-3. Durable jobs and EPUB: add job and export schema migrations, then connect
+2. Durable jobs and EPUB: add job and export schema migrations, then connect
    source and translation stages to persisted retries, prefetch, pause/resume,
    recovery, and ordered EPUB snapshots.
 
-4. Additional adapters and legacy import: migrate source sites one at a time and
+3. Additional adapters and legacy import: migrate source sites one at a time and
    build the opt-in, read-only JSON importer with duplicate review reporting.
 
 ## Deferred
