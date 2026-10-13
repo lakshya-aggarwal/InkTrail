@@ -40,7 +40,7 @@ test('migrations are recorded once and source foreign keys are enforced', () => 
   migrate(database);
   migrate(database);
 
-  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 5);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 6);
   assert.throws(() => database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'missing-novel', 1, 'One', '2026-10-11T00:00:00.000Z'));
   assert.throws(() => database.prepare(`
     insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
@@ -78,7 +78,7 @@ test('ownership triggers reject direct cross-novel translation records', (t) => 
   insertNovel.run('novel-a', 'A', now, now);
   insertNovel.run('novel-b', 'B', now, now);
   insertChapter.run('chapter-a', 'novel-a', 1, 'One', now);
-  insertChapter.run('chapter-b', 'novel-b', 1, 'One', now);
+  insertChapter.run('chapter-b', 'novel-b', 2, 'Two', now);
   insertRevision.run('revision-a', 'chapter-a', 1, 'A', 'test', 'test', now);
   insertRevision.run('revision-b', 'chapter-b', 1, 'B', 'test', 'test', now);
 
@@ -92,6 +92,48 @@ test('ownership triggers reject direct cross-novel translation records', (t) => 
       proposed_correction, reason, status, created_at, updated_at
     ) values ('feedback-a', 'novel-a', 'chapter-a', 'revision-b', 'text', 'source', 'translation', 'correction', 'reason', 'pending', ?, ?)
   `).run(now, now));
+  database.prepare(`
+    insert into translation_quality_findings (id, novel_id, translation_revision_id, kind, details, created_at)
+    values ('finding-b', 'novel-a', 'revision-a', 'gap', 'gap', ?)
+  `).run(now);
+  assert.throws(() => database.prepare("update translation_revisions set chapter_id = 'chapter-b' where id = 'revision-a'").run(), /translation revision chapter cannot change/);
+  database.prepare(`
+    insert into feedback_reports (
+      id, novel_id, chapter_id, translation_revision_id, selected_text, source_context, translated_context,
+      proposed_correction, reason, status, created_at, updated_at
+    ) values ('feedback-b', 'novel-a', 'chapter-a', 'revision-a', 'text', 'source', 'translation', 'correction', 'reason', 'pending', ?, ?)
+  `).run(now, now);
+  assert.throws(() => database.prepare("update chapters set novel_id = 'novel-b' where id = 'chapter-a'").run(), /chapter novel cannot change/);
+  assert.equal(database.prepare("select novel_id from chapters where id = 'chapter-a'").get().novel_id, 'novel-a');
+  assert.equal(database.prepare("select chapter_id from translation_revisions where id = 'revision-a'").get().chapter_id, 'chapter-a');
+});
+
+test('version 4 databases with invalid ownership require repair before migration 5', (t) => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  const now = '2026-10-13T00:00:00.000Z';
+  for (const [version, name] of [[1, '001-library.sql'], [2, '002-sources.sql'], [3, '003-normalize-kujiang-novel-source-urls.sql'], [4, '004-translation-consistency.sql']]) {
+    database.exec(readFileSync(new URL(`../../src/db/migrations/${name}`, import.meta.url), 'utf8'));
+    database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(version, now);
+  }
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-b', 'B', now, now);
+  database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'novel-a', 1, 'One', now);
+  database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-b', 'novel-b', 1, 'One', now);
+  database.prepare('insert into translation_revisions (id, chapter_id, revision, translated_text, provider, model, created_at) values (?, ?, ?, ?, ?, ?, ?)').run('revision-b', 'chapter-b', 1, 'B', 'test', 'test', now);
+  database.prepare(`
+    insert into translation_quality_findings (id, novel_id, translation_revision_id, kind, details, created_at)
+    values ('finding-a', 'novel-a', 'revision-b', 'gap', 'gap', ?)
+  `).run(now);
+  database.prepare(`
+    insert into feedback_reports (
+      id, novel_id, chapter_id, translation_revision_id, selected_text, source_context, translated_context,
+      proposed_correction, reason, status, created_at, updated_at
+    ) values ('feedback-a', 'novel-a', 'chapter-a', 'revision-b', 'text', 'source', 'translation', 'correction', 'reason', 'pending', ?, ?)
+  `).run(now, now);
+
+  assert.throws(() => migrate(database), /repair required: cross-novel translation consistency records/);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 5').get().count, 0);
 });
 
 test('source site identities are unique', () => {

@@ -28,3 +28,10 @@
 - Feedback status updates now compare the report id, novel id, and observed status. A two-connection regression verifies a stale transition raises `ConflictError` without overwriting the committed status.
 - Focused migration and consistency repository tests: 10 passed.
 - Full package test command with the bundled Node runtime: 51 passed.
+
+## Fix Round 2 Evidence
+
+- Migration 005 now refuses cross-novel quality findings or feedback reports before recording version 5. Migration 006 repeats that protection for databases that already recorded version 5, then blocks ownership-changing chapter and revision updates while translation consistency records exist.
+- Direct SQLite regressions cover blocked chapter and revision moves plus a version-4 database with invalid quality finding and feedback report rows that fails before version 5 is recorded.
+- Focused migration and consistency repository tests: 11 passed.
+- Full package test command with the bundled Node runtime: 52 passed.
