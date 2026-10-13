@@ -26,3 +26,11 @@ export class SourceFetchError extends Error {
     this.retryable = true;
   }
 }
+
+export class TranslationProviderError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'TranslationProviderError';
+    this.retryable = true;
+  }
+}
