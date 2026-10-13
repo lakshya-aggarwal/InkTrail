@@ -73,6 +73,7 @@ test('imports a source chapter with explicit reader order and persisted provenan
 
   const imported = await service.importChapter({ novelId: novel.id, sourceUrl: chapterUrl, chapterNumber: 7 });
 
+  assert.equal(imported.created, true);
   assert.equal(imported.chapter.chapterNumber, 7);
   assert.equal(imported.chapter.originalText, '夜色落在城墙上，远处的灯火仍未熄灭。\n\n他抬起头\n\n看见了归来的路。\n\n她说上一章的旧书里夹着一张加入书架的便签。');
   assert.equal(imported.chapter.sourceUrl, chapterUrl);
@@ -98,7 +99,7 @@ test('re-importing unchanged source content is idempotent', async (t) => {
   const first = await service.importChapter(input);
   const second = await service.importChapter(input);
 
-  assert.deepEqual(second, first);
+  assert.deepEqual(second, { ...first, created: false });
   assert.deepEqual(tableCounts(repositories.database), { chapters: 1, novel_sources: 1, chapter_sources: 1 });
 });
 

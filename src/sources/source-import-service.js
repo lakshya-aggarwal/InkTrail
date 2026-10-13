@@ -71,7 +71,7 @@ export function createSourceImportService({ database, repositories, adapterRegis
           if (existingChapter.id !== existingSource.chapterId) {
             throw new ConflictError('source chapter mapping conflicts with existing provenance');
           }
-          return { chapter: existingChapter, source: existingSource };
+          return { chapter: existingChapter, source: existingSource, created: false };
         }
 
         const novelSource = repositories.sources.createOrGetNovelSource({
@@ -103,7 +103,7 @@ export function createSourceImportService({ database, repositories, adapterRegis
           fetchedAt: clock().toISOString(),
           contentSha256
         });
-        return { chapter: repositories.chapters.getReaderChapter(novelId, chapterNumber), source };
+        return { chapter: repositories.chapters.getReaderChapter(novelId, chapterNumber), source, created: true };
       });
     }
   };

@@ -1,4 +1,4 @@
-import { ConflictError, NotFoundError, ValidationError } from '../domain/errors.js';
+import { ConflictError, NotFoundError, SourceFetchError, ValidationError } from '../domain/errors.js';
 import { InvalidJsonError, readJson, UnsupportedMediaTypeError, writeJson } from './json.js';
 
 function errorBody(code, message, retryable, resourceId) {
@@ -19,6 +19,10 @@ function routeError(response, error, resourceId) {
   }
   if (error instanceof InvalidJsonError) {
     writeJson(response, 400, errorBody('invalid_json', error.message, false));
+    return;
+  }
+  if (error instanceof SourceFetchError) {
+    writeJson(response, 502, errorBody('source_fetch_failed', 'Source chapter could not be fetched', true));
     return;
   }
   if (error instanceof ValidationError) {
@@ -84,6 +88,17 @@ export function createRouter(libraryService) {
       const novelId = decodePathParameter(response, chapterCollectionMatch[1]);
       if (novelId === undefined) return;
       await handle(response, novelId, async () => writeJson(response, 201, libraryService.recordChapter(novelId, await readJson(request))));
+      return;
+    }
+
+    const sourceChapterCollectionMatch = /^\/api\/v1\/novels\/([^/]+)\/source-chapters$/.exec(pathname);
+    if (method === 'POST' && sourceChapterCollectionMatch) {
+      const novelId = decodePathParameter(response, sourceChapterCollectionMatch[1]);
+      if (novelId === undefined) return;
+      await handle(response, novelId, async () => {
+        const { created, sourceChapter } = await libraryService.importSourceChapter(novelId, await readJson(request));
+        writeJson(response, created ? 201 : 200, sourceChapter);
+      });
       return;
     }
 

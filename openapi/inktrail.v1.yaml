@@ -111,6 +111,46 @@ paths:
           $ref: '#/components/responses/Conflict'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
+  /api/v1/novels/{novelId}/source-chapters:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+    post:
+      operationId: importSourceChapter
+      summary: Import one supported source chapter
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceChapterImportInput'
+            example:
+              sourceUrl: https://www.kujiang.com/book/9/906595
+              chapterNumber: 2491
+      responses:
+        '200':
+          description: Source chapter was already imported
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceChapterImport'
+        '201':
+          description: Source chapter imported
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceChapterImport'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '502':
+          $ref: '#/components/responses/SourceFetchFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/v1/novels/{novelId}/chapters/{chapterNumber}:
     parameters:
       - $ref: '#/components/parameters/NovelId'
@@ -201,6 +241,23 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    SourceFetchFailed:
+      description: A supported source chapter could not be fetched or parsed. This error is retryable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: source_fetch_failed
+              message: Source chapter could not be fetched
+              retryable: true
+    InternalError:
+      description: Unexpected source import failure. This error is retryable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
   schemas:
     CreateNovelInput:
       type: object
@@ -228,6 +285,16 @@ components:
         sourceUrl:
           type: string
           format: uri
+    SourceChapterImportInput:
+      type: object
+      required: [sourceUrl, chapterNumber]
+      properties:
+        sourceUrl:
+          type: string
+          format: uri
+        chapterNumber:
+          type: integer
+          minimum: 1
     SetReadingProgressInput:
       type: object
       required: [chapterNumber]
@@ -313,6 +380,70 @@ components:
             nextChapterNumber:
               type: integer
               nullable: true
+    SourceChapterImport:
+      type: object
+      required: [chapter, source]
+      properties:
+        chapter:
+          $ref: '#/components/schemas/ReaderChapter'
+        source:
+          $ref: '#/components/schemas/ChapterSource'
+    ChapterSource:
+      type: object
+      required:
+        - id
+        - novelId
+        - chapterId
+        - novelSourceId
+        - site
+        - externalChapterId
+        - sourceUrl
+        - normalizedUrl
+        - sourceTitle
+        - fetchedAt
+        - contentSha256
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        novelId:
+          type: string
+          format: uuid
+        chapterId:
+          type: string
+          format: uuid
+        novelSourceId:
+          type: string
+          format: uuid
+        site:
+          type: string
+        externalChapterId:
+          type: string
+        sourceUrl:
+          type: string
+          format: uri
+        normalizedUrl:
+          type: string
+          format: uri
+        sourceTitle:
+          type: string
+        previousSourceUrl:
+          type: string
+          format: uri
+          nullable: true
+        nextSourceUrl:
+          type: string
+          format: uri
+          nullable: true
+        fetchedAt:
+          type: string
+          format: date-time
+        contentSha256:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
     ReadingProgress:
       type: object
       required: [novelId, chapterNumber, updatedAt]

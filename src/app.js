@@ -48,7 +48,7 @@ export function createApp({ databasePath, fetch = globalThis.fetch }) {
     adapterRegistry: createAdapterRegistry([createKujiangAdapter({ fetch })]),
     clock
   });
-  const router = createRouter(createLibraryService(repositories));
+  const router = createRouter(createLibraryService(repositories, sourceImportService));
   const server = createServer(async (request, response) => {
     if (await serveBrowserAsset(request, response)) return;
     await router(request, response);

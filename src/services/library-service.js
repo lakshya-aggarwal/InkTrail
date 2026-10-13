@@ -1,4 +1,4 @@
-export function createLibraryService(repositories) {
+export function createLibraryService(repositories, sourceImportService) {
   function withReadingProgress(novel) {
     return {
       ...novel,
@@ -29,6 +29,14 @@ export function createLibraryService(repositories) {
 
     setReadingProgress(novelId, input) {
       return repositories.progress.setReadingProgress({ ...input, novelId });
+    },
+
+    async importSourceChapter(novelId, input) {
+      if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+        return sourceImportService.importChapter(input);
+      }
+      const { created, ...sourceChapter } = await sourceImportService.importChapter({ ...input, novelId });
+      return { created, sourceChapter };
     }
   };
 }

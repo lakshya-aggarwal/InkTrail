@@ -1,11 +1,24 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { afterEach, beforeEach, test } from 'node:test';
 import { startTestApp } from '../support/http.js';
 
 let app;
+const chapterUrl = 'https://www.kujiang.com/book/9/906595';
+const failedChapterUrl = 'https://www.kujiang.com/book/9/906597';
+const fixturePath = new URL('../fixtures/kujiang/chapter.html', import.meta.url);
+
+async function fixtureFetch(sourceUrl) {
+  if (sourceUrl === failedChapterUrl) {
+    throw new Error('raw upstream source text must not reach API clients');
+  }
+  return new Response(await readFile(fixturePath, 'utf8'), {
+    headers: { 'content-type': 'text/html' }
+  });
+}
 
 beforeEach(async () => {
-  app = await startTestApp();
+  app = await startTestApp({ fetch: fixtureFetch });
 });
 
 afterEach(async () => {
@@ -108,6 +121,94 @@ test('a duplicate chapter request returns conflict without replacing the origina
     }
   });
   assert.equal(stored.body.originalText, 'Original Chinese');
+});
+
+test('source chapter import returns reader data and is idempotent', async () => {
+  const novel = await requestJson(app, 'POST', '/api/v1/novels', { title: 'Ink Trail' });
+  const path = `/api/v1/novels/${novel.body.id}/source-chapters`;
+  const input = { sourceUrl: chapterUrl, chapterNumber: 7 };
+
+  const first = await requestJson(app, 'POST', path, input);
+  const second = await requestJson(app, 'POST', path, input);
+
+  assert.equal(first.status, 201);
+  assert.equal(second.status, 200);
+  assert.equal(first.body.chapter.chapterNumber, 7);
+  assert.equal(first.body.chapter.originalText, '夜色落在城墙上，远处的灯火仍未熄灭。\n\n他抬起头\n\n看见了归来的路。\n\n她说上一章的旧书里夹着一张加入书架的便签。');
+  assert.equal(first.body.source.sourceUrl, chapterUrl);
+  assert.deepEqual(second.body, first.body);
+});
+
+test('source chapter import requires JSON object input and a positive chapter number', async () => {
+  const novel = await requestJson(app, 'POST', '/api/v1/novels', { title: 'Ink Trail' });
+  const path = `/api/v1/novels/${novel.body.id}/source-chapters`;
+  const nonJson = await app.request(path, {
+    method: 'POST',
+    headers: { 'content-type': 'text/plain' },
+    body: 'not json'
+  });
+  const nonObject = await requestJson(app, 'POST', path, []);
+  const zero = await requestJson(app, 'POST', path, { sourceUrl: chapterUrl, chapterNumber: 0 });
+  const jsonWithCharset = await app.request(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ sourceUrl: chapterUrl, chapterNumber: 1 })
+  });
+
+  assert.deepEqual({ status: nonJson.status, body: await nonJson.json() }, {
+    status: 415,
+    body: { error: { code: 'unsupported_media_type', message: 'Expected application/json', retryable: false } }
+  });
+  assert.deepEqual(nonObject, {
+    status: 400,
+    body: { error: { code: 'validation_error', message: 'input must be an object', retryable: false } }
+  });
+  assert.deepEqual(zero, {
+    status: 400,
+    body: { error: { code: 'validation_error', message: 'chapterNumber must be a positive integer', retryable: false } }
+  });
+  assert.equal(jsonWithCharset.status, 201);
+});
+
+test('source chapter import maps missing, unsupported, and conflicting sources to stable errors', async () => {
+  const novel = await requestJson(app, 'POST', '/api/v1/novels', { title: 'Ink Trail' });
+  const path = `/api/v1/novels/${novel.body.id}/source-chapters`;
+  const missing = await requestJson(app, 'POST', '/api/v1/novels/missing/source-chapters', {
+    sourceUrl: chapterUrl,
+    chapterNumber: 1
+  });
+  const unsupported = await requestJson(app, 'POST', path, {
+    sourceUrl: 'https://example.test/chapter',
+    chapterNumber: 1
+  });
+  await requestJson(app, 'POST', path, { sourceUrl: chapterUrl, chapterNumber: 1 });
+  const conflict = await requestJson(app, 'POST', path, { sourceUrl: chapterUrl, chapterNumber: 2 });
+
+  assert.deepEqual(missing, {
+    status: 404,
+    body: { error: { code: 'not_found', message: 'novel not found', retryable: false, resourceId: 'missing' } }
+  });
+  assert.deepEqual(unsupported, {
+    status: 400,
+    body: { error: { code: 'validation_error', message: 'sourceUrl is not supported', retryable: false } }
+  });
+  assert.deepEqual(conflict, {
+    status: 409,
+    body: { error: { code: 'conflict', message: 'source chapter mapping conflicts with existing provenance', retryable: false } }
+  });
+});
+
+test('source chapter import maps fetch errors without exposing raw upstream text', async () => {
+  const novel = await requestJson(app, 'POST', '/api/v1/novels', { title: 'Ink Trail' });
+  const failed = await requestJson(app, 'POST', `/api/v1/novels/${novel.body.id}/source-chapters`, {
+    sourceUrl: failedChapterUrl,
+    chapterNumber: 1
+  });
+
+  assert.deepEqual(failed, {
+    status: 502,
+    body: { error: { code: 'source_fetch_failed', message: 'Source chapter could not be fetched', retryable: true } }
+  });
 });
 
 test('write routes require valid JSON and domain errors have a stable shape', async () => {
