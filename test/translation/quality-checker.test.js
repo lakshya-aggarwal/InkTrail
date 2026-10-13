@@ -5,7 +5,7 @@ import { checkTranslationQuality } from '../../src/translation/quality-checker.j
 test('flags Chinese leakage and repeated prose deterministically', () => {
   assert.deepEqual(checkTranslationQuality({
     originalChinese: '第一段。\n\n第二段。\n\n第三段。',
-    paragraphs: ['The same prose.', 'The same prose.', 'English 中文']
+    paragraphs: ['The same prose.', 'The same prose.', `English 中文${String.fromCodePoint(0x20bb7)}`]
   }), [
     { kind: 'repeated_prose', details: 'paragraph 2 repeats paragraph 1' },
     { kind: 'chinese_leakage', details: 'paragraph 3 contains Chinese characters' }

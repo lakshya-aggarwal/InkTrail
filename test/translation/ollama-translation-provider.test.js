@@ -50,6 +50,23 @@ test('uses a bounded structured Ollama request and returns only translated parag
   assert.equal(body.format.additionalProperties, false);
 });
 
+test('rejects redirects before the loopback request can leave Ollama', async () => {
+  let request;
+  const provider = createOllamaTranslationProvider({
+    fetch: async (url, options) => {
+      request = { url, options };
+      throw new TypeError('redirect rejected');
+    }
+  });
+
+  await assert.rejects(
+    () => provider.translate(input),
+    (error) => error instanceof TranslationProviderError && error.message === 'Ollama translation request failed'
+  );
+  assert.equal(request.url, 'http://127.0.0.1:11434/api/generate');
+  assert.equal(request.options.redirect, 'error');
+});
+
 test('rejects non-loopback endpoints and maps bad model responses to typed errors without leaking content', async () => {
   assert.throws(() => createOllamaTranslationProvider({ endpoint: 'https://example.com' }), TranslationProviderError);
   const provider = createOllamaTranslationProvider({

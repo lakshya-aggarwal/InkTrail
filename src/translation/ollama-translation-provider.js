@@ -235,6 +235,7 @@ export function createOllamaTranslationProvider({ fetch = globalThis.fetch, endp
         try {
           response = await fetch(url, {
             method: 'POST',
+            redirect: 'error',
             headers: { 'content-type': 'application/json' },
             signal: controller.signal,
             body: JSON.stringify({

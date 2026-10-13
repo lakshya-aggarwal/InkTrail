@@ -1,4 +1,4 @@
-const CHINESE = /[\u3400-\u9fff]/;
+const CHINESE = /\p{Script=Han}/u;
 
 function sourceSegments(originalChinese) {
   if (typeof originalChinese !== 'string') {
