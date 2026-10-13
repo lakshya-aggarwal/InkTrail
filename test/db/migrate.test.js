@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { openDatabase } from '../../src/db/database.js';
 import { migrate } from '../../src/db/migrate.js';
@@ -11,10 +12,13 @@ test('migration creates library and source provenance tables', () => {
   assert.deepEqual(names.sort(), [
     'chapter_sources',
     'chapters',
+    'feedback_reports',
+    'memory_entries',
     'novel_sources',
     'novels',
     'reading_progress',
     'schema_migrations',
+    'translation_quality_findings',
     'translation_revisions'
   ]);
 });
@@ -36,7 +40,7 @@ test('migrations are recorded once and source foreign keys are enforced', () => 
   migrate(database);
   migrate(database);
 
-  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 3);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 4);
   assert.throws(() => database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'missing-novel', 1, 'One', '2026-10-11T00:00:00.000Z'));
   assert.throws(() => database.prepare(`
     insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
@@ -46,6 +50,21 @@ test('migrations are recorded once and source foreign keys are enforced', () => 
     insert into chapter_sources (id, novel_id, chapter_id, novel_source_id, site, external_chapter_id, source_url, normalized_url, source_title, fetched_at, content_sha256, created_at)
     values ('chapter-source-a', 'missing-novel', 'missing-chapter', 'missing-source', 'kujiang', '906595', 'https://www.kujiang.com/book/9/906595', 'https://www.kujiang.com/book/9/906595', 'One', '2026-10-12T00:00:00.000Z', 'hash-a', '2026-10-12T00:00:00.000Z')
   `).run());
+});
+
+test('additive migration preserves existing translation revisions', (t) => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  database.exec(readFileSync(new URL('../../src/db/migrations/001-library.sql', import.meta.url), 'utf8'));
+  database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(1, '2026-10-11T00:00:00.000Z');
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', '2026-10-11T00:00:00.000Z', '2026-10-11T00:00:00.000Z');
+  database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'novel-a', 1, 'One', '2026-10-11T00:00:00.000Z');
+  database.prepare('insert into translation_revisions (id, chapter_id, revision, translated_text, provider, model, created_at) values (?, ?, ?, ?, ?, ?, ?)').run('revision-a', 'chapter-a', 1, 'First', 'test', 'test', '2026-10-11T00:00:00.000Z');
+
+  migrate(database);
+
+  assert.equal(database.prepare('select translated_text from translation_revisions where id = ?').get('revision-a').translated_text, 'First');
+  assert.equal(database.prepare("select count(*) as count from sqlite_master where type = 'table' and name in ('translation_quality_findings', 'memory_entries', 'feedback_reports')").get().count, 3);
 });
 
 test('source site identities are unique', () => {
