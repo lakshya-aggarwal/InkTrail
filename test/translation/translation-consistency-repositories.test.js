@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { createChapterRepository } from '../../src/chapters/chapter-repository.js';
 import { openDatabase } from '../../src/db/database.js';
@@ -103,4 +106,58 @@ test('feedback reports are chapter-scoped and transition explicitly', (t) => {
   assert.equal(approved.status, 'approved');
   assert.throws(() => fixture.feedback.updateFeedbackStatus({ novelId: firstNovel.id, reportId: report.id, status: 'rejected' }), ConflictError);
   assert.throws(() => fixture.feedback.updateFeedbackStatus({ novelId: secondNovel.id, reportId: report.id, status: 'approved' }), NotFoundError);
+});
+
+test('feedback status update rejects a stale transition from another connection', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'inktrail-feedback-'));
+  const databasePath = join(directory, 'library.sqlite');
+  const firstDatabase = openDatabase({ databasePath });
+  const secondDatabase = openDatabase({ databasePath });
+  t.after(() => {
+    firstDatabase.close();
+    secondDatabase.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  migrate(firstDatabase);
+  const clock = () => new Date('2026-10-13T00:00:00.000Z');
+  const novels = createNovelRepository(firstDatabase, clock);
+  const chapters = createChapterRepository(firstDatabase, clock);
+  const feedback = createFeedbackRepository(firstDatabase, clock);
+  const novel = novels.createNovel({ title: 'First' });
+  const chapter = chapters.recordChapter({ novelId: novel.id, chapterNumber: 1, title: 'One', originalText: 'Chinese' });
+  const revision = chapters.addTranslationRevision({ chapterId: chapter.id, translatedText: 'Translation', provider: 'test', model: 'test' });
+  const report = feedback.submitFeedbackReport({
+    novelId: novel.id,
+    chapterId: chapter.id,
+    translationRevisionId: revision.id,
+    selectedText: 'Translation',
+    sourceContext: 'Chinese',
+    translatedContext: 'Translation',
+    proposedCorrection: 'Correction',
+    reason: 'Reason'
+  });
+  const secondFeedback = createFeedbackRepository(secondDatabase, clock);
+  let interleaved = false;
+  const staleReadDatabase = {
+    prepare(sql) {
+      const statement = firstDatabase.prepare(sql);
+      if (!sql.includes('from feedback_reports where id = ? and novel_id = ?')) {
+        return statement;
+      }
+      return {
+        get(...values) {
+          const row = statement.get(...values);
+          if (!interleaved) {
+            interleaved = true;
+            secondFeedback.updateFeedbackStatus({ novelId: novel.id, reportId: report.id, status: 'approved' });
+          }
+          return row;
+        }
+      };
+    }
+  };
+  const staleFeedback = createFeedbackRepository(staleReadDatabase, clock);
+
+  assert.throws(() => staleFeedback.updateFeedbackStatus({ novelId: novel.id, reportId: report.id, status: 'rejected' }), ConflictError);
+  assert.equal(secondFeedback.listFeedbackReports({ novelId: novel.id, chapterId: chapter.id })[0].status, 'approved');
 });

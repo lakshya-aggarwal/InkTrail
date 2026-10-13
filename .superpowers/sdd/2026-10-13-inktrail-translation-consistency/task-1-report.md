@@ -20,3 +20,11 @@
 
 - This task only stores findings, verified memory, and feedback. It does not add provider calls, translation or feedback services, routes, UI, jobs, or runtime composition.
 - Approval records only the feedback status here. The later service must append the corrected translation revision and save any verified memory entry together.
+
+## Fix Round 1 Evidence
+
+- Added migration 005 with SQLite ownership triggers for direct inserts and ownership-changing updates to quality findings and feedback reports.
+- Added direct SQL regression coverage for cross-novel quality finding and feedback report inserts.
+- Feedback status updates now compare the report id, novel id, and observed status. A two-connection regression verifies a stale transition raises `ConflictError` without overwriting the committed status.
+- Focused migration and consistency repository tests: 10 passed.
+- Full package test command with the bundled Node runtime: 51 passed.

@@ -40,7 +40,7 @@ test('migrations are recorded once and source foreign keys are enforced', () => 
   migrate(database);
   migrate(database);
 
-  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 4);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 5);
   assert.throws(() => database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'missing-novel', 1, 'One', '2026-10-11T00:00:00.000Z'));
   assert.throws(() => database.prepare(`
     insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
@@ -65,6 +65,33 @@ test('additive migration preserves existing translation revisions', (t) => {
 
   assert.equal(database.prepare('select translated_text from translation_revisions where id = ?').get('revision-a').translated_text, 'First');
   assert.equal(database.prepare("select count(*) as count from sqlite_master where type = 'table' and name in ('translation_quality_findings', 'memory_entries', 'feedback_reports')").get().count, 3);
+});
+
+test('ownership triggers reject direct cross-novel translation records', (t) => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  migrate(database);
+  const now = '2026-10-13T00:00:00.000Z';
+  const insertNovel = database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)');
+  const insertChapter = database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)');
+  const insertRevision = database.prepare('insert into translation_revisions (id, chapter_id, revision, translated_text, provider, model, created_at) values (?, ?, ?, ?, ?, ?, ?)');
+  insertNovel.run('novel-a', 'A', now, now);
+  insertNovel.run('novel-b', 'B', now, now);
+  insertChapter.run('chapter-a', 'novel-a', 1, 'One', now);
+  insertChapter.run('chapter-b', 'novel-b', 1, 'One', now);
+  insertRevision.run('revision-a', 'chapter-a', 1, 'A', 'test', 'test', now);
+  insertRevision.run('revision-b', 'chapter-b', 1, 'B', 'test', 'test', now);
+
+  assert.throws(() => database.prepare(`
+    insert into translation_quality_findings (id, novel_id, translation_revision_id, kind, details, created_at)
+    values ('finding-a', 'novel-a', 'revision-b', 'gap', 'gap', ?)
+  `).run(now));
+  assert.throws(() => database.prepare(`
+    insert into feedback_reports (
+      id, novel_id, chapter_id, translation_revision_id, selected_text, source_context, translated_context,
+      proposed_correction, reason, status, created_at, updated_at
+    ) values ('feedback-a', 'novel-a', 'chapter-a', 'revision-b', 'text', 'source', 'translation', 'correction', 'reason', 'pending', ?, ?)
+  `).run(now, now));
 });
 
 test('source site identities are unique', () => {

@@ -76,7 +76,10 @@ export function createFeedbackRepository(database, clock) {
       proposed_correction, reason, status, created_at, updated_at
     from feedback_reports where id = ? and novel_id = ?
   `);
-  const updateStatus = database.prepare('update feedback_reports set status = ?, updated_at = ? where id = ?');
+  const updateStatus = database.prepare(`
+    update feedback_reports set status = ?, updated_at = ?
+    where id = ? and novel_id = ? and status = ?
+  `);
 
   function requireNovel(novelId) {
     const id = requireId(novelId, 'novelId');
@@ -146,7 +149,9 @@ export function createFeedbackRepository(database, clock) {
         throw new ConflictError('feedback status transition is not allowed');
       }
       const updatedAt = clock().toISOString();
-      updateStatus.run(nextStatus, updatedAt, report.id);
+      if (updateStatus.run(nextStatus, updatedAt, report.id, id, report.status).changes === 0) {
+        throw new ConflictError('feedback status transition is stale');
+      }
       return toFeedbackReport({ ...report, status: nextStatus, updated_at: updatedAt });
     }
   };
