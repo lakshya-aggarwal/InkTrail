@@ -69,6 +69,25 @@ export function createChapterRepository(database, clock) {
     select id, novel_id, chapter_number, title, original_text, source_url, created_at
     from chapters where novel_id = ? and chapter_number = ?
   `);
+  const sourcedChapterByNovelAndNumber = database.prepare(`
+    select chapters.id, chapters.novel_id, chapters.chapter_number, chapters.title,
+      chapters.original_text, chapters.source_url, chapters.created_at
+    from chapters
+    where chapters.novel_id = ? and chapters.chapter_number = ?
+      and exists (select 1 from chapter_sources where chapter_sources.chapter_id = chapters.id)
+  `);
+  const priorSourcedOriginalTexts = database.prepare(`
+    select original_text
+    from (
+      select chapters.original_text, chapters.chapter_number
+      from chapters
+      where chapters.novel_id = ? and chapters.chapter_number < ?
+        and exists (select 1 from chapter_sources where chapter_sources.chapter_id = chapters.id)
+      order by chapters.chapter_number desc
+      limit 3
+    )
+    order by chapter_number
+  `);
   const chapterById = database.prepare('select 1 from chapters where id = ?');
   const insertChapter = database.prepare(`
     insert into chapters (id, novel_id, chapter_number, title, original_text, source_url, created_at)
@@ -89,6 +108,19 @@ export function createChapterRepository(database, clock) {
   `);
   const previousChapter = database.prepare('select chapter_number from chapters where novel_id = ? and chapter_number < ? order by chapter_number desc limit 1');
   const nextChapter = database.prepare('select chapter_number from chapters where novel_id = ? and chapter_number > ? order by chapter_number limit 1');
+
+  function getSourcedChapter(novelId, chapterNumber) {
+    const id = requireId(novelId, 'novelId');
+    const number = requireChapterNumber(chapterNumber);
+    if (!novelExists.get(id)) {
+      throw new NotFoundError('novel not found');
+    }
+    const chapter = sourcedChapterByNovelAndNumber.get(id, number);
+    if (!chapter) {
+      throw new NotFoundError('sourced chapter not found');
+    }
+    return toChapter(chapter);
+  }
 
   return {
     recordChapter(input) {
@@ -174,6 +206,13 @@ export function createChapterRepository(database, clock) {
         previousChapterNumber: previous?.chapter_number ?? null,
         nextChapterNumber: next?.chapter_number ?? null
       };
+    },
+
+    getSourcedChapter,
+
+    listPriorSourcedOriginalTexts(novelId, chapterNumber) {
+      const chapter = getSourcedChapter(novelId, chapterNumber);
+      return priorSourcedOriginalTexts.all(chapter.novelId, chapter.chapterNumber).map(({ original_text }) => original_text);
     }
   };
 }
