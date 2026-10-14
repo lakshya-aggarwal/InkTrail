@@ -12,7 +12,12 @@ test('migration creates library and source provenance tables', () => {
   assert.deepEqual(names.sort(), [
     'chapter_sources',
     'chapters',
+    'epub_export_chapters',
+    'epub_exports',
     'feedback_reports',
+    'job_attempts',
+    'job_events',
+    'jobs',
     'memory_entries',
     'novel_sources',
     'novels',
@@ -40,7 +45,7 @@ test('migrations are recorded once and source foreign keys are enforced', () => 
   migrate(database);
   migrate(database);
 
-  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 6);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 7);
   assert.throws(() => database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'missing-novel', 1, 'One', '2026-10-11T00:00:00.000Z'));
   assert.throws(() => database.prepare(`
     insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
