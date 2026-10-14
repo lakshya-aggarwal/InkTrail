@@ -34,3 +34,15 @@
 
 - No UI, jobs, queues, adapters, EPUB work, dependencies, or live provider
   calls were added.
+
+## Fix Round 1 Evidence
+
+- OpenAPI now models approved feedback decisions separately from rejected and
+  needs-review decisions. Approval requires verified memory; non-approved
+  decisions require only their status.
+- The HTTP contract test verifies that `{ "status": "approved" }` returns
+  the existing `400 validation_error` envelope with `sourceTerm is required`,
+  then confirms that a complete approval still succeeds.
+- Fix validation: focused HTTP contracts passed 3 tests, the full suite passed
+  70 tests, OpenAPI lint remained valid with the same three existing warnings,
+  and `git diff --check` passed.

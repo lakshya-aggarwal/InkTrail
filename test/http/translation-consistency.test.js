@@ -124,6 +124,7 @@ test('feedback routes preserve validation, not-found, and conflict envelopes', a
     proposedCorrection: 'Corrected translation.',
     reason: 'Verified terminology'
   });
+  const missingMemory = await requestJson('PATCH', `/api/v1/novels/${novel.body.id}/feedback/${feedback.body.id}`, { status: 'approved' });
   const approved = await requestJson('PATCH', `/api/v1/novels/${novel.body.id}/feedback/${feedback.body.id}`, {
     status: 'approved',
     memory: { sourceTerm: 'term', preferredRendering: 'term', semanticScope: 'scope', evidence: 'evidence', confidence: 1 }
@@ -142,6 +143,10 @@ test('feedback routes preserve validation, not-found, and conflict envelopes', a
   assert.deepEqual(invalid, {
     status: 400,
     body: { error: { code: 'validation_error', message: 'input must be an object', retryable: false } }
+  });
+  assert.deepEqual(missingMemory, {
+    status: 400,
+    body: { error: { code: 'validation_error', message: 'sourceTerm is required', retryable: false } }
   });
   assert.equal(approved.status, 200);
   assert.deepEqual(conflict, {

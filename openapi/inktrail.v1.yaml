@@ -743,14 +743,25 @@ components:
               type: string
               format: date-time
     FeedbackDecisionInput:
+      oneOf:
+        - $ref: '#/components/schemas/ApprovedFeedbackDecisionInput'
+        - $ref: '#/components/schemas/NonApprovedFeedbackDecisionInput'
+    ApprovedFeedbackDecisionInput:
+      type: object
+      required: [status, memory]
+      properties:
+        status:
+          type: string
+          enum: [approved]
+        memory:
+          $ref: '#/components/schemas/MemoryInput'
+    NonApprovedFeedbackDecisionInput:
       type: object
       required: [status]
       properties:
         status:
           type: string
-          enum: [approved, rejected, needs_review]
-        memory:
-          $ref: '#/components/schemas/MemoryInput'
+          enum: [rejected, needs_review]
     FeedbackDecision:
       type: object
       required: [report, revision, memory]
