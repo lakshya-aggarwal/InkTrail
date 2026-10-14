@@ -199,6 +199,7 @@ export function createChapterRepository(database, clock) {
       const next = nextChapter.get(id, number);
       return {
         ...toChapter(chapter),
+        translationRevisionId: revision?.id ?? null,
         translatedText: revision?.translated_text ?? null,
         provider: revision?.provider ?? null,
         model: revision?.model ?? null,

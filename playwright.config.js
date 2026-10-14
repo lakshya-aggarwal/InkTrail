@@ -21,7 +21,7 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: 'PORT=4277 INKTRAIL_DATA_DIR=.test-data node src/server.js',
+    command: 'PORT=4277 node scripts/source-fixture-server.js',
     url: 'http://127.0.0.1:4277/api/v1/health',
     reuseExistingServer: false
   }

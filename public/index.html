@@ -22,6 +22,19 @@
         <p id="chapter-number"></p>
         <h1 id="chapter-title" tabindex="-1">Choose a novel</h1>
         <article id="chapter-text"><p>Select a novel from your shelf to begin reading.</p></article>
+        <p id="translation-status" role="status"></p>
+        <button aria-controls="feedback-form" aria-expanded="false" hidden id="report-translation" type="button">Report a translation issue</button>
+        <form aria-describedby="feedback-status" hidden id="feedback-form" novalidate>
+          <h2>Report a translation issue</h2>
+          <label for="feedback-selected-text">Selected passage</label>
+          <textarea id="feedback-selected-text" name="selectedText" required rows="4"></textarea>
+          <label for="feedback-correction">Suggested correction</label>
+          <textarea id="feedback-correction" name="proposedCorrection" required rows="4"></textarea>
+          <label for="feedback-reason">What needs attention?</label>
+          <textarea id="feedback-reason" name="reason" required rows="3"></textarea>
+          <div class="feedback-actions"><button type="submit">Send report</button><button data-feedback-cancel type="button">Cancel</button></div>
+        </form>
+        <p id="feedback-status" tabindex="-1"></p>
         <p id="reader-status" role="alert"></p>
         <nav aria-label="Chapter navigation at end of chapter" class="chapter-navigation chapter-navigation-end"><button type="button" data-direction="previous" aria-label="Previous chapter">Previous</button><button type="button" data-direction="next" aria-label="Next chapter">Next</button></nav>
       </section>

@@ -7,6 +7,13 @@ const reader = document.querySelector('#reader');
 const chapterNumber = document.querySelector('#chapter-number');
 const chapterTitle = document.querySelector('#chapter-title');
 const chapterText = document.querySelector('#chapter-text');
+const translationStatus = document.querySelector('#translation-status');
+const reportTranslation = document.querySelector('#report-translation');
+const feedbackForm = document.querySelector('#feedback-form');
+const feedbackSelectedText = document.querySelector('#feedback-selected-text');
+const feedbackCorrection = document.querySelector('#feedback-correction');
+const feedbackReason = document.querySelector('#feedback-reason');
+const feedbackStatus = document.querySelector('#feedback-status');
 const readerStatus = document.querySelector('#reader-status');
 
 let novels = [];
@@ -39,16 +46,56 @@ function showReaderMessage(title, message) {
   chapterNumber.textContent = '';
   chapterTitle.textContent = title;
   chapterText.replaceChildren(Object.assign(document.createElement('p'), { textContent: message }));
+  translationStatus.textContent = '';
+  resetFeedbackForm();
+  reportTranslation.hidden = true;
   setNavigationAvailability(null);
+}
+
+function setFeedbackStatus(message, { error = false } = {}) {
+  feedbackStatus.textContent = message;
+  feedbackStatus.setAttribute('role', error ? 'alert' : 'status');
+  if (error) feedbackStatus.focus();
+}
+
+function resetFeedbackForm() {
+  feedbackForm.reset();
+  feedbackForm.hidden = true;
+  reportTranslation.setAttribute('aria-expanded', 'false');
+  for (const field of [feedbackSelectedText, feedbackCorrection, feedbackReason]) field.removeAttribute('aria-invalid');
+}
+
+function selectedChapterText() {
+  const selection = window.getSelection();
+  if (selection?.rangeCount && chapterText.contains(selection.anchorNode) && chapterText.contains(selection.focusNode)) {
+    const text = selection.toString().trim();
+    if (text) return text;
+  }
+  return currentChapter?.translatedText ?? '';
+}
+
+function showFeedbackForm() {
+  if (!currentChapter?.translatedText || !currentChapter.translationRevisionId) return;
+  feedbackSelectedText.value = selectedChapterText();
+  feedbackForm.hidden = false;
+  reportTranslation.setAttribute('aria-expanded', 'true');
+  feedbackStatus.textContent = '';
+  feedbackSelectedText.focus();
 }
 
 function renderChapter(chapter, { focus = false } = {}) {
   currentChapter = chapter;
   readerStatus.textContent = '';
+  resetFeedbackForm();
+  feedbackStatus.textContent = '';
   chapterNumber.textContent = `Chapter ${chapter.chapterNumber}`;
   chapterTitle.textContent = chapter.title;
-  const text = chapter.translatedText || chapter.originalText;
+  const hasTranslation = Boolean(chapter.translatedText && chapter.translationRevisionId);
+  const text = hasTranslation ? chapter.translatedText : chapter.originalText;
   chapterText.replaceChildren(...text.split(/\n{2,}/).map((paragraph) => Object.assign(document.createElement('p'), { textContent: paragraph })));
+  chapterText.lang = hasTranslation ? 'en' : 'zh';
+  translationStatus.textContent = hasTranslation ? '' : 'English translation unavailable. Showing the original Chinese.';
+  reportTranslation.hidden = !hasTranslation;
   setNavigationAvailability(chapter);
   if (focus) { chapterTitle.focus({ preventScroll: true }); window.scrollTo(0, 0); }
 }
@@ -102,7 +149,48 @@ novelForm.addEventListener('submit', async (event) => {
 });
 
 library.addEventListener('click', (event) => { const button = event.target.closest('[data-novel-id]'); if (button) openNovel(button.dataset.novelId); });
-reader.addEventListener('click', (event) => { const button = event.target.closest('[data-direction]'); if (button) navigate(button.dataset.direction); });
+reader.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-direction]');
+  if (button) navigate(button.dataset.direction);
+  if (event.target.closest('#report-translation')) showFeedbackForm();
+  if (event.target.closest('[data-feedback-cancel]')) resetFeedbackForm();
+});
+feedbackForm.addEventListener('input', (event) => event.target.removeAttribute('aria-invalid'));
+feedbackForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!currentChapter?.translatedText || !currentChapter.translationRevisionId) return;
+  const fields = [
+    [feedbackSelectedText, 'Selected passage'],
+    [feedbackCorrection, 'Suggested correction'],
+    [feedbackReason, 'What needs attention?']
+  ];
+  const missing = fields.find(([field]) => !field.value.trim());
+  if (missing) {
+    const [field, label] = missing;
+    field.setAttribute('aria-invalid', 'true');
+    setFeedbackStatus(`${label} is required.`, { error: true });
+    field.focus();
+    return;
+  }
+  try {
+    await request(`/api/v1/novels/${encodeURIComponent(currentChapter.novelId)}/chapters/${currentChapter.chapterNumber}/feedback`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        translationRevisionId: currentChapter.translationRevisionId,
+        selectedText: feedbackSelectedText.value.trim(),
+        sourceContext: currentChapter.originalText,
+        translatedContext: currentChapter.translatedText,
+        proposedCorrection: feedbackCorrection.value.trim(),
+        reason: feedbackReason.value.trim()
+      })
+    });
+    resetFeedbackForm();
+    setFeedbackStatus('Your translation issue report was sent. Thank you.');
+  } catch (error) {
+    setFeedbackStatus(error.message, { error: true });
+  }
+});
 window.addEventListener('keydown', (event) => { if (event.target.matches('input, textarea, select, [contenteditable]')) return; if (event.key === 'ArrowLeft') navigate('previous'); if (event.key === 'ArrowRight') navigate('next'); });
 window.addEventListener('popstate', async () => { const state = readerState(); if (!state) return showReaderMessage('Choose a novel', 'Select a novel from your shelf to begin reading.'); try { await showChapter(state.novelId, state.chapter, { focus: true }); renderLibrary(); } catch (error) { showReaderMessage('Chapter unavailable', error.message); } });
 

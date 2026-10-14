@@ -498,8 +498,12 @@ components:
       allOf:
         - $ref: '#/components/schemas/Chapter'
         - type: object
-          required: [translatedText, provider, model, revision, previousChapterNumber, nextChapterNumber]
+          required: [translationRevisionId, translatedText, provider, model, revision, previousChapterNumber, nextChapterNumber]
           properties:
+            translationRevisionId:
+              type: string
+              format: uuid
+              nullable: true
             translatedText:
               type: string
               nullable: true

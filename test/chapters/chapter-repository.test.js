@@ -23,9 +23,11 @@ test('translation revisions append instead of overwriting prior text', (t) => {
   const novel = novels.createNovel({ title: 'Ink Trail' });
   const chapter = chapters.recordChapter({ novelId: novel.id, chapterNumber: 1, title: 'Arrival', originalText: 'Chinese', sourceUrl: null });
 
-  chapters.addTranslationRevision({ chapterId: chapter.id, translatedText: 'First', provider: 'test', model: 'test' });
-  chapters.addTranslationRevision({ chapterId: chapter.id, translatedText: 'Second', provider: 'test', model: 'test' });
+  const first = chapters.addTranslationRevision({ chapterId: chapter.id, translatedText: 'First', provider: 'test', model: 'test' });
+  const second = chapters.addTranslationRevision({ chapterId: chapter.id, translatedText: 'Second', provider: 'test', model: 'test' });
 
+  assert.deepEqual(chapters.getReaderChapter(novel.id, 1).translationRevisionId, second.id);
+  assert.notEqual(chapters.getReaderChapter(novel.id, 1).translationRevisionId, first.id);
   assert.equal(chapters.getReaderChapter(novel.id, 1).translatedText, 'Second');
   assert.deepEqual(chapters.listTranslationRevisions(chapter.id).map(({ translatedText }) => translatedText), ['First', 'Second']);
 });

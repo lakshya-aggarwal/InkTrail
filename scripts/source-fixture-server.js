@@ -5,12 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../src/app.js';
 
-const sourceUrl = 'https://www.kujiang.com/book/9/906595';
+const sourceUrl = /^https:\/\/www\.kujiang\.com\/book\/[1-9]\d*\/[1-9]\d*$/;
 const failedSourceUrl = 'https://www.kujiang.com/book/9/906597';
 const fixturePath = new URL('../test/fixtures/kujiang/chapter.html', import.meta.url);
 
 async function fixtureFetch(url) {
-  if (url === sourceUrl) {
+  if (sourceUrl.test(String(url))) {
     return new Response(await readFile(fixturePath, 'utf8'), {
       headers: { 'content-type': 'text/html; charset=utf-8' }
     });
