@@ -17,7 +17,7 @@ function applyCorrection(latestTranslation, report) {
   if (firstMatch === -1) {
     throw new ConflictError('feedback selected text does not match the latest translation');
   }
-  if (latestTranslation.indexOf(report.selectedText, firstMatch + report.selectedText.length) !== -1) {
+  if (latestTranslation.indexOf(report.selectedText, firstMatch + 1) !== -1) {
     throw new ConflictError('feedback selected text is ambiguous in the latest translation');
   }
   return `${latestTranslation.slice(0, firstMatch)}${report.proposedCorrection}${latestTranslation.slice(firstMatch + report.selectedText.length)}`;

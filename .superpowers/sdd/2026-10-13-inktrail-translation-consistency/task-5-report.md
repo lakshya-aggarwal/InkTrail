@@ -39,6 +39,27 @@ Direct inspection at 1244px and 390px found readable type, no overlapping contro
 - `pnpm exec redocly lint openapi/inktrail.v1.yaml`: valid with the same three recommended-rule warnings for license metadata and missing 4XX responses on health and novel-list reads.
 - `git diff --check`: passed.
 
+## Final Review Round 2 P1 Repair
+
+### Changed Paths
+
+- `src/feedback/feedback-verification-service.js`
+- `test/translation/translation-services.test.js`
+- `task-5-report.md`
+
+### Behavior
+
+- Ambiguity detection now searches from the character after the first candidate, so overlapping selections are rejected as well as separated repeated selections.
+- A report selecting `ana` from `banana` now returns the existing ambiguity conflict before feedback status, translation revisions, or verified memory can mutate.
+
+### Validation
+
+- Regression reproduction before repair: focused translation service suite had 9 passed and 1 failed because overlapping `ana` in `banana` was accepted.
+- Focused translation service suite: `node --test test/translation/translation-services.test.js` - 10 passed.
+- Full unit/API suite: `pnpm test` - 72 passed with Node v24.13.0.
+- Full browser suite: `pnpm exec playwright test` - 16 passed across desktop and mobile Chromium.
+- `git diff --check`: passed.
+
 ## Limits
 
 - No jobs, queues, EPUB export, adapters, provider networking, dependencies, or remote services were added.

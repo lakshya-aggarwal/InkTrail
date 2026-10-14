@@ -254,6 +254,7 @@ test('approval rejects feedback without a unique selected passage', (t) => {
   const novel = repositories.novels.createNovel({ title: 'First' });
   const missingChapter = seededChapter(repositories, novel, 1);
   const ambiguousChapter = seededChapter(repositories, novel, 2);
+  const overlappingChapter = seededChapter(repositories, novel, 3);
   const missingReport = feedbackReport(repositories, novel, missingChapter, {
     translatedText: 'Opening paragraph.\n\nClosing paragraph.',
     selectedText: 'Absent paragraph.'
@@ -263,15 +264,23 @@ test('approval rejects feedback without a unique selected passage', (t) => {
     selectedText: 'Repeated paragraph.',
     proposedCorrection: 'Corrected paragraph.'
   });
+  const overlappingReport = feedbackReport(repositories, novel, overlappingChapter, {
+    translatedText: 'banana',
+    selectedText: 'ana',
+    proposedCorrection: 'x'
+  });
   const verify = createFeedbackVerificationService({ database, repositories });
   const memory = { sourceTerm: '师兄', preferredRendering: 'senior brother', semanticScope: 'ranks', evidence: 'feedback report', confidence: 1 };
 
   assert.throws(() => verify.verifyFeedback({ novelId: novel.id, reportId: missingReport.id, status: 'approved', memory }), /does not match/);
   assert.throws(() => verify.verifyFeedback({ novelId: novel.id, reportId: ambiguousReport.id, status: 'approved', memory }), /ambiguous/);
+  assert.throws(() => verify.verifyFeedback({ novelId: novel.id, reportId: overlappingReport.id, status: 'approved', memory }), /ambiguous/);
   assert.equal(repositories.feedback.listFeedbackReports({ novelId: novel.id, chapterId: missingChapter.id })[0].status, 'pending');
   assert.equal(repositories.feedback.listFeedbackReports({ novelId: novel.id, chapterId: ambiguousChapter.id })[0].status, 'pending');
+  assert.equal(repositories.feedback.listFeedbackReports({ novelId: novel.id, chapterId: overlappingChapter.id })[0].status, 'pending');
   assert.deepEqual(repositories.chapters.listTranslationRevisions(missingChapter.id).map(({ translatedText }) => translatedText), ['Opening paragraph.\n\nClosing paragraph.']);
   assert.deepEqual(repositories.chapters.listTranslationRevisions(ambiguousChapter.id).map(({ translatedText }) => translatedText), ['Repeated paragraph.\n\nRepeated paragraph.']);
+  assert.deepEqual(repositories.chapters.listTranslationRevisions(overlappingChapter.id).map(({ translatedText }) => translatedText), ['banana']);
   assert.deepEqual(repositories.memory.listVerifiedMemoryEntries(novel.id), []);
 });
 
