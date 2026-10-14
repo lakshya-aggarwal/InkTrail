@@ -42,3 +42,34 @@ Direct inspection at 1244px and 390px found readable type, no overlapping contro
 ## Limits
 
 - No jobs, queues, EPUB export, adapters, provider networking, dependencies, or remote services were added.
+
+## Fix Round 1 Evidence
+
+### Changed Paths
+
+- `public/index.html`
+- `public/app.js`
+- `test/e2e/reader.spec.js`
+- `task-5-report.md`
+
+### Accessibility Fixes
+
+- `#feedback-status` is a stable `role="status"` live region before a successful submission changes its text. Error messages switch the role to `alert` before their text is written and receive focus as before.
+- Cancelling a feedback form clears any visible status and returns focus to the still-visible `#report-translation` button. The shared form reset helper remains focus-neutral for reader replacement paths.
+- Rendering a new chapter or the unavailable-chapter message clears stale feedback status. Successful submission retains its confirmation until a subsequent form dismissal or reader-content replacement.
+
+### Browser Coverage
+
+- The feedback submission flow asserts the stable status role before text changes, preserves that role for the success message, and verifies that an unavailable replacement clears the earlier success message.
+- The validation-error flow asserts that Cancel clears the stale error and restores focus to the report action.
+
+### Validation
+
+- Focused reader browser suite: `pnpm exec playwright test test/e2e/reader.spec.js` - 14 passed across desktop and mobile Chromium.
+- Full unit/API suite: `pnpm test` - 70 passed with Node v24.13.0.
+- Full browser suite: `pnpm exec playwright test` - 16 passed across desktop and mobile Chromium.
+- `git diff --check`: passed after the report append.
+
+### Visual Scope
+
+- This round changes no CSS, text layout, control dimensions, or responsive behavior. No pixel shift was introduced, so the Task 5 desktop and mobile screenshots remain applicable and no replacement screenshots were needed.

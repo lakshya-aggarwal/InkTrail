@@ -48,14 +48,20 @@ function showReaderMessage(title, message) {
   chapterText.replaceChildren(Object.assign(document.createElement('p'), { textContent: message }));
   translationStatus.textContent = '';
   resetFeedbackForm();
+  clearFeedbackStatus();
   reportTranslation.hidden = true;
   setNavigationAvailability(null);
 }
 
 function setFeedbackStatus(message, { error = false } = {}) {
-  feedbackStatus.textContent = message;
   feedbackStatus.setAttribute('role', error ? 'alert' : 'status');
+  feedbackStatus.textContent = message;
   if (error) feedbackStatus.focus();
+}
+
+function clearFeedbackStatus() {
+  feedbackStatus.setAttribute('role', 'status');
+  feedbackStatus.textContent = '';
 }
 
 function resetFeedbackForm() {
@@ -79,7 +85,7 @@ function showFeedbackForm() {
   feedbackSelectedText.value = selectedChapterText();
   feedbackForm.hidden = false;
   reportTranslation.setAttribute('aria-expanded', 'true');
-  feedbackStatus.textContent = '';
+  clearFeedbackStatus();
   feedbackSelectedText.focus();
 }
 
@@ -87,7 +93,7 @@ function renderChapter(chapter, { focus = false } = {}) {
   currentChapter = chapter;
   readerStatus.textContent = '';
   resetFeedbackForm();
-  feedbackStatus.textContent = '';
+  clearFeedbackStatus();
   chapterNumber.textContent = `Chapter ${chapter.chapterNumber}`;
   chapterTitle.textContent = chapter.title;
   const hasTranslation = Boolean(chapter.translatedText && chapter.translationRevisionId);
@@ -153,7 +159,11 @@ reader.addEventListener('click', (event) => {
   const button = event.target.closest('[data-direction]');
   if (button) navigate(button.dataset.direction);
   if (event.target.closest('#report-translation')) showFeedbackForm();
-  if (event.target.closest('[data-feedback-cancel]')) resetFeedbackForm();
+  if (event.target.closest('[data-feedback-cancel]')) {
+    resetFeedbackForm();
+    clearFeedbackStatus();
+    reportTranslation.focus();
+  }
 });
 feedbackForm.addEventListener('input', (event) => event.target.removeAttribute('aria-invalid'));
 feedbackForm.addEventListener('submit', async (event) => {

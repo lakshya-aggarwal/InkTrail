@@ -112,6 +112,7 @@ test('reader uses the latest English revision', async ({ page }, testInfo) => {
 test('reader submits a translation issue with selected text and context', async ({ page }, testInfo) => {
   const { novelId } = await seedTranslatedSourceChapter(page.request, { sourceUrl: fixtureChapterUrl(testInfo, 2) });
   await page.goto(`/?novel=${novelId}&chapter=1`);
+  await expect(page.locator('#feedback-status')).toHaveAttribute('role', 'status');
   await page.getByRole('button', { name: 'Report a translation issue' }).click();
   await expect(page.getByLabel('Selected passage')).toHaveValue('Fixture translation 1.\n\nFixture translation 2.\n\nFixture translation 3.\n\nFixture translation 4.');
   await page.getByLabel('Suggested correction').fill('The city walls were dark.');
@@ -121,7 +122,15 @@ test('reader submits a translation issue with selected text and context', async 
 
   expect((await response).status()).toBe(201);
   await expect(page.locator('#feedback-status')).toContainText('Your translation issue report was sent. Thank you.');
+  await expect(page.locator('#feedback-status')).toHaveAttribute('role', 'status');
   await expect(page.locator('#feedback-form')).toBeHidden();
+
+  await page.evaluate((id) => {
+    window.history.pushState({}, '', `/?novel=${id}&chapter=2`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, novelId);
+  await expect(page.getByRole('heading', { name: 'Chapter unavailable' })).toBeVisible();
+  await expect(page.locator('#feedback-status')).toBeEmpty();
 });
 
 test('reader keeps feedback errors visible and focused', async ({ page }, testInfo) => {
@@ -136,4 +145,8 @@ test('reader keeps feedback errors visible and focused', async ({ page }, testIn
   await expect(page.locator('#feedback-status')).toHaveText('Selected passage is required.');
   await expect(page.getByLabel('Selected passage')).toBeFocused();
   await expect(page.getByLabel('Selected passage')).toHaveAttribute('aria-invalid', 'true');
+
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.locator('#feedback-status')).toBeEmpty();
+  await expect(page.getByRole('button', { name: 'Report a translation issue' })).toBeFocused();
 });
