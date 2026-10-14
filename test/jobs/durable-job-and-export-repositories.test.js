@@ -95,10 +95,13 @@ test('translation jobs canonicalize targets, isolate novels, and enforce lifecyc
 test('job checkpoints, targets, and claims reject stale or foreign work', (t) => {
   const repositories = fixture();
   t.after(() => repositories.database.close());
-  const { firstNovel, firstChapter, secondChapter, otherChapter } = seed(repositories);
+  const { firstNovel, secondNovel, firstChapter, secondChapter, otherChapter } = seed(repositories);
   const rangeJob = repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { startChapterNumber: 1, endChapterNumber: 1 } });
 
   assert.throws(() => repositories.database.prepare('update jobs set current_chapter_id = ? where id = ?').run(otherChapter.id, rangeJob.id), /job checkpoint must belong to job novel/);
+  repositories.database.prepare('update jobs set current_chapter_id = ? where id = ?').run(firstChapter.id, rangeJob.id);
+  assert.equal(repositories.jobs.getJob({ novelId: firstNovel.id, jobId: rangeJob.id }).currentChapterId, firstChapter.id);
+  assert.throws(() => repositories.database.prepare('update chapters set novel_id = ? where id = ?').run(secondNovel.id, firstChapter.id), /chapter novel cannot change while job checkpoint exists/);
   const claimedRange = repositories.jobs.claimNextRunnable({ claimToken: 'range-claim' });
   assert.equal(claimedRange.id, rangeJob.id);
   assert.throws(() => repositories.database.prepare(`
