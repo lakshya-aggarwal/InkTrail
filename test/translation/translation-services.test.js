@@ -73,10 +73,14 @@ function provider(paragraphs) {
   };
 }
 
-function feedbackReport(repositories, novel, chapter) {
+function feedbackReport(repositories, novel, chapter, {
+  translatedText = 'Original translation',
+  selectedText = translatedText,
+  proposedCorrection = 'Corrected translation'
+} = {}) {
   const revision = repositories.chapters.addTranslationRevision({
     chapterId: chapter.id,
-    translatedText: 'Original translation',
+    translatedText,
     provider: 'fake',
     model: 'fake-model'
   });
@@ -84,10 +88,10 @@ function feedbackReport(repositories, novel, chapter) {
     novelId: novel.id,
     chapterId: chapter.id,
     translationRevisionId: revision.id,
-    selectedText: 'Original translation',
+    selectedText,
     sourceContext: '第一段。',
-    translatedContext: 'Original translation',
-    proposedCorrection: 'Corrected translation',
+    translatedContext: translatedText,
+    proposedCorrection,
     reason: 'Verified terminology'
   });
 }
@@ -191,7 +195,7 @@ test('marks feedback for review without changing translation history or memory',
   assert.deepEqual(repositories.memory.listVerifiedMemoryEntries(novel.id), []);
 });
 
-test('approval appends a correction and updates only the feedback novel memory', (t) => {
+test('approval accepts full-chapter feedback and updates only the feedback novel memory', (t) => {
   const { database, repositories } = fixture();
   t.after(() => database.close());
   const novel = repositories.novels.createNovel({ title: 'First' });
@@ -215,6 +219,60 @@ test('approval appends a correction and updates only the feedback novel memory',
   assert.equal(result.memory.preferredRendering, 'senior brother');
   assert.deepEqual(repositories.chapters.listTranslationRevisions(chapter.id).map(({ translatedText }) => translatedText), ['Original translation', 'Corrected translation']);
   assert.deepEqual(repositories.memory.listVerifiedMemoryEntries(otherNovel.id).map(({ preferredRendering }) => preferredRendering), ['other rendering']);
+});
+
+test('approval replaces a selected passage while preserving surrounding translated paragraphs', (t) => {
+  const { database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'First' });
+  const chapter = seededChapter(repositories, novel, 1);
+  const report = feedbackReport(repositories, novel, chapter, {
+    translatedText: 'Opening paragraph.\n\nSelected paragraph.\n\nClosing paragraph.',
+    selectedText: 'Selected paragraph.',
+    proposedCorrection: 'Corrected paragraph.'
+  });
+  const verify = createFeedbackVerificationService({ database, repositories });
+
+  const result = verify.verifyFeedback({
+    novelId: novel.id,
+    reportId: report.id,
+    status: 'approved',
+    memory: { sourceTerm: '师兄', preferredRendering: 'senior brother', semanticScope: 'ranks', evidence: 'feedback report', confidence: 1 }
+  });
+
+  assert.equal(result.revision.translatedText, 'Opening paragraph.\n\nCorrected paragraph.\n\nClosing paragraph.');
+  assert.equal(repositories.chapters.getReaderChapter(novel.id, 1).translatedText, result.revision.translatedText);
+  assert.deepEqual(
+    repositories.chapters.listTranslationRevisions(chapter.id).map(({ translatedText }) => translatedText),
+    ['Opening paragraph.\n\nSelected paragraph.\n\nClosing paragraph.', 'Opening paragraph.\n\nCorrected paragraph.\n\nClosing paragraph.']
+  );
+});
+
+test('approval rejects feedback without a unique selected passage', (t) => {
+  const { database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'First' });
+  const missingChapter = seededChapter(repositories, novel, 1);
+  const ambiguousChapter = seededChapter(repositories, novel, 2);
+  const missingReport = feedbackReport(repositories, novel, missingChapter, {
+    translatedText: 'Opening paragraph.\n\nClosing paragraph.',
+    selectedText: 'Absent paragraph.'
+  });
+  const ambiguousReport = feedbackReport(repositories, novel, ambiguousChapter, {
+    translatedText: 'Repeated paragraph.\n\nRepeated paragraph.',
+    selectedText: 'Repeated paragraph.',
+    proposedCorrection: 'Corrected paragraph.'
+  });
+  const verify = createFeedbackVerificationService({ database, repositories });
+  const memory = { sourceTerm: '师兄', preferredRendering: 'senior brother', semanticScope: 'ranks', evidence: 'feedback report', confidence: 1 };
+
+  assert.throws(() => verify.verifyFeedback({ novelId: novel.id, reportId: missingReport.id, status: 'approved', memory }), /does not match/);
+  assert.throws(() => verify.verifyFeedback({ novelId: novel.id, reportId: ambiguousReport.id, status: 'approved', memory }), /ambiguous/);
+  assert.equal(repositories.feedback.listFeedbackReports({ novelId: novel.id, chapterId: missingChapter.id })[0].status, 'pending');
+  assert.equal(repositories.feedback.listFeedbackReports({ novelId: novel.id, chapterId: ambiguousChapter.id })[0].status, 'pending');
+  assert.deepEqual(repositories.chapters.listTranslationRevisions(missingChapter.id).map(({ translatedText }) => translatedText), ['Opening paragraph.\n\nClosing paragraph.']);
+  assert.deepEqual(repositories.chapters.listTranslationRevisions(ambiguousChapter.id).map(({ translatedText }) => translatedText), ['Repeated paragraph.\n\nRepeated paragraph.']);
+  assert.deepEqual(repositories.memory.listVerifiedMemoryEntries(novel.id), []);
 });
 
 test('rejects approval for feedback targeting a stale translation revision', (t) => {

@@ -106,6 +106,7 @@ test('reader uses the latest English revision', async ({ page }, testInfo) => {
   await page.goto(`/?novel=${novelId}&chapter=1`);
 
   await expect(page.locator('#chapter-text')).toContainText('Verified correction.');
+  await expect(page.locator('#chapter-text')).toContainText('Fixture translation 2.');
   await expect(page.getByText('English translation unavailable. Showing the original Chinese.')).toBeHidden();
 });
 

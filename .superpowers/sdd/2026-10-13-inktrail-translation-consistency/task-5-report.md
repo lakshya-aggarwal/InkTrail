@@ -73,3 +73,27 @@ Direct inspection at 1244px and 390px found readable type, no overlapping contro
 ### Visual Scope
 
 - This round changes no CSS, text layout, control dimensions, or responsive behavior. No pixel shift was introduced, so the Task 5 desktop and mobile screenshots remain applicable and no replacement screenshots were needed.
+
+## Final Review P1 Repair
+
+### Changed Paths
+
+- `src/feedback/feedback-verification-service.js`
+- `test/translation/translation-services.test.js`
+- `test/e2e/reader.spec.js`
+- `task-5-report.md`
+
+### Behavior
+
+- Approved feedback now appends a complete chapter revision by replacing the report's exact, unique selected text within the targeted latest translation. All surrounding paragraphs remain unchanged.
+- Missing or repeated selected text now produces a conflict before the feedback status, translation history, or verified memory can change. Existing stale-revision and verified-memory rollback safeguards remain inside the same transaction.
+- Whole-chapter feedback remains valid because replacing the selected full chapter yields the corrected full chapter revision.
+
+### Validation
+
+- Reproduction before repair: the focused latest-revision browser check failed on desktop and mobile because `Fixture translation 2.` disappeared after approval.
+- Focused service suite: `node --test test/translation/translation-services.test.js` - 10 passed.
+- Focused repaired reader check: `pnpm exec playwright test test/e2e/reader.spec.js --grep "latest English revision"` - 2 passed across desktop and mobile Chromium.
+- Full unit/API suite: `pnpm test` - 72 passed with Node v24.13.0.
+- Full browser suite: `pnpm exec playwright test` - 16 passed across desktop and mobile Chromium.
+- `git diff --check`: passed.
