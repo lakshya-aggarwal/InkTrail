@@ -122,9 +122,18 @@ function safeDetails(value) {
   return JSON.stringify(details);
 }
 
+function targetIncludesChapter(job, chapterNumber) {
+  const target = JSON.parse(job.target_json);
+  return Array.isArray(target.chapterNumbers)
+    ? target.chapterNumbers.includes(chapterNumber)
+    : chapterNumber >= target.startChapterNumber && chapterNumber <= target.endChapterNumber;
+}
+
 export function createJobRepository(database, clock) {
   const novelExists = database.prepare('select 1 from novels where id = ?');
   const chapterInNovel = database.prepare('select 1 from chapters where id = ? and novel_id = ?');
+  const chapterByIdInNovel = database.prepare('select chapter_number from chapters where id = ? and novel_id = ?');
+  const exportInNovel = database.prepare('select 1 from epub_exports where id = ? and novel_id = ?');
   const jobById = database.prepare('select * from jobs where id = ?');
   const jobInNovel = database.prepare('select * from jobs where id = ? and novel_id = ?');
   const jobByIdempotencyKey = database.prepare('select * from jobs where novel_id = ? and type = ? and idempotency_key = ?');
@@ -163,12 +172,12 @@ export function createJobRepository(database, clock) {
   const attemptById = database.prepare('select * from job_attempts where id = ? and job_id = ?');
   const nextAttempt = database.prepare('select coalesce(max(attempt_number), 0) + 1 as attempt_number from job_attempts where job_id = ? and chapter_id is ?');
   const insertAttempt = database.prepare(`
-    insert into job_attempts (id, job_id, novel_id, chapter_id, attempt_number, state, started_at, finished_at, error_code, error_message)
-    values (@id, @jobId, @novelId, @chapterId, @attemptNumber, 'started', @startedAt, null, null, null)
+    insert into job_attempts (id, job_id, novel_id, chapter_id, attempt_number, state, started_at, finished_at, error_code, error_message, claim_token)
+    values (@id, @jobId, @novelId, @chapterId, @attemptNumber, 'started', @startedAt, null, null, null, @claimToken)
   `);
   const finishAttempt = database.prepare(`
     update job_attempts set state = @state, finished_at = @finishedAt, error_code = @errorCode, error_message = @errorMessage
-    where id = @id and job_id = @jobId and state = 'started'
+    where id = @id and job_id = @jobId and state = 'started' and claim_token = @claimToken
   `);
   const attemptsForJob = database.prepare('select * from job_attempts where job_id = ? order by started_at, attempt_number, id');
   const eventsForJob = database.prepare('select * from job_events where job_id = ? order by created_at, id');
@@ -222,11 +231,14 @@ export function createJobRepository(database, clock) {
       : (() => {
           const exportId = requireId(requireObject(target, 'target').exportId, 'exportId');
           const targetJson = JSON.stringify({ exportId });
-          return { targetJson, targetHash: hash(targetJson) };
+          return { targetJson, targetHash: hash(targetJson), exportId };
         })();
     const normalizedKey = idempotencyKey === null || idempotencyKey === undefined ? null : requireId(idempotencyKey, 'idempotencyKey');
 
     return withinTransaction(() => {
+      if (type === 'build_epub' && !exportInNovel.get(normalizedTarget.exportId, normalizedNovelId)) {
+        throw new NotFoundError('EPUB export not found');
+      }
       if (normalizedKey) {
         const existing = jobByIdempotencyKey.get(normalizedNovelId, type, normalizedKey);
         if (existing) {
@@ -347,17 +359,26 @@ export function createJobRepository(database, clock) {
         const job = jobInNovel.get(requireId(jobId, 'jobId'), id);
         if (!job) throw new NotFoundError('job not found');
         if (job.state !== 'running') throw new ConflictError('job is not running');
+        if (!job.claim_token) throw new ConflictError('job claim is not active');
         if (job.type === 'translate_chapters' && chapterId === null) throw new ValidationError('chapterId is required for translation attempts');
         if (job.type === 'build_epub' && chapterId !== null) throw new ValidationError('chapterId is not allowed for EPUB attempts');
         const normalizedChapterId = chapterId === null ? null : requireId(chapterId, 'chapterId');
-        if (normalizedChapterId && !chapterInNovel.get(normalizedChapterId, id)) throw new NotFoundError('chapter not found');
+        const chapter = normalizedChapterId === null ? null : chapterByIdInNovel.get(normalizedChapterId, id);
+        if (normalizedChapterId && !chapter) throw new NotFoundError('chapter not found');
+        if (job.type === 'translate_chapters' && !targetIncludesChapter(job, chapter.chapter_number)) {
+          throw new ConflictError('chapter is not in the job target');
+        }
+        if (job.type === 'build_epub' && !exportInNovel.get(JSON.parse(job.target_json).exportId, id)) {
+          throw new ConflictError('EPUB job target is not available');
+        }
         const attempt = {
           id: randomUUID(),
           jobId: job.id,
           novelId: id,
           chapterId: normalizedChapterId,
           attemptNumber: nextAttempt.get(job.id, normalizedChapterId).attempt_number,
-          startedAt: clock().toISOString()
+          startedAt: clock().toISOString(),
+          claimToken: job.claim_token
         };
         insertAttempt.run(attempt);
         appendEvent(job, { type: 'chapter_started', message: 'Checkpoint started.', chapterId: normalizedChapterId, details: normalizedChapterId ? { chapterId: normalizedChapterId, attemptNumber: attempt.attemptNumber } : { attemptNumber: attempt.attemptNumber } });
@@ -366,15 +387,18 @@ export function createJobRepository(database, clock) {
     },
 
     finishAttempt(input) {
-      const { jobId, attemptId, state, errorCode = null, errorMessage = null } = requireObject(input);
+      const { jobId, attemptId, claimToken, state, errorCode = null, errorMessage = null } = requireObject(input);
       if (!attemptStates.has(state) || state === 'started') throw new ValidationError('attempt state is invalid');
       return withinTransaction(() => {
         const job = jobById.get(requireId(jobId, 'jobId'));
         if (!job) throw new NotFoundError('job not found');
+        const normalizedClaimToken = requireId(claimToken, 'claimToken');
+        if (job.state !== 'running' || job.claim_token !== normalizedClaimToken) throw new ConflictError('job claim is no longer active');
         const attempt = attemptById.get(requireId(attemptId, 'attemptId'), job.id);
         if (!attempt) throw new NotFoundError('job attempt not found');
+        if (attempt.claim_token !== normalizedClaimToken) throw new ConflictError('job attempt belongs to a different claim');
         const finishedAt = clock().toISOString();
-        if (finishAttempt.run({ id: attempt.id, jobId: job.id, state, finishedAt, errorCode: requireOptionalText(errorCode, 'errorCode'), errorMessage: requireOptionalText(errorMessage, 'errorMessage') }).changes === 0) {
+        if (finishAttempt.run({ id: attempt.id, jobId: job.id, claimToken: normalizedClaimToken, state, finishedAt, errorCode: requireOptionalText(errorCode, 'errorCode'), errorMessage: requireOptionalText(errorMessage, 'errorMessage') }).changes === 0) {
           throw new ConflictError('job attempt is no longer active');
         }
         if (state === 'succeeded') {
