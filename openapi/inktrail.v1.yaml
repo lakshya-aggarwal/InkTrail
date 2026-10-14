@@ -169,6 +169,123 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '404':
           $ref: '#/components/responses/NotFound'
+  /api/v1/novels/{novelId}/chapters/{chapterNumber}/translations:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+      - $ref: '#/components/parameters/ChapterNumber'
+    post:
+      operationId: translateChapter
+      summary: Translate one imported source chapter
+      responses:
+        '201':
+          description: Translation revision created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranslationResult'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/TranslationProviderFailed'
+  /api/v1/novels/{novelId}/chapters/{chapterNumber}/feedback:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+      - $ref: '#/components/parameters/ChapterNumber'
+    get:
+      operationId: listChapterFeedback
+      summary: List feedback reports for a chapter
+      responses:
+        '200':
+          description: Chapter feedback reports
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FeedbackReport'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: submitChapterFeedback
+      summary: Submit translation feedback for a chapter
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackSubmissionInput'
+      responses:
+        '201':
+          description: Feedback report created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeedbackReport'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+  /api/v1/novels/{novelId}/feedback/{reportId}:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+      - $ref: '#/components/parameters/ReportId'
+    patch:
+      operationId: decideFeedback
+      summary: Verify a feedback report
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackDecisionInput'
+      responses:
+        '200':
+          description: Feedback decision saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeedbackDecision'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+  /api/v1/novels/{novelId}/verified-memory:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+    get:
+      operationId: listVerifiedMemory
+      summary: List verified memory for a novel
+      responses:
+        '200':
+          description: Verified novel memory
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MemoryEntry'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/v1/novels/{novelId}/reading-progress:
     parameters:
       - $ref: '#/components/parameters/NovelId'
@@ -216,6 +333,13 @@ components:
       schema:
         type: integer
         minimum: 1
+    ReportId:
+      name: reportId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
   responses:
     ValidationError:
       description: Invalid request data or malformed JSON
@@ -251,6 +375,17 @@ components:
             error:
               code: source_fetch_failed
               message: Source chapter could not be fetched
+              retryable: true
+    TranslationProviderFailed:
+      description: The local translation provider could not complete the request. This error is retryable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: translation_provider_failed
+              message: Translation provider could not complete the request
               retryable: true
     InternalError:
       description: Unexpected source import failure. This error is retryable.
@@ -460,6 +595,178 @@ components:
         updatedAt:
           type: string
           format: date-time
+    TranslationRevision:
+      type: object
+      required: [id, chapterId, revision, translatedText, provider, model, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        chapterId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          minimum: 1
+        translatedText:
+          type: string
+        provider:
+          type: string
+        model:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    TranslationQualityFinding:
+      type: object
+      required: [id, novelId, translationRevisionId, kind, details, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        novelId:
+          type: string
+          format: uuid
+        translationRevisionId:
+          type: string
+          format: uuid
+        kind:
+          type: string
+        details:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    TranslationResult:
+      type: object
+      required: [revision, findings]
+      properties:
+        revision:
+          $ref: '#/components/schemas/TranslationRevision'
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/TranslationQualityFinding'
+    FeedbackSubmissionInput:
+      type: object
+      required: [translationRevisionId, selectedText, sourceContext, translatedContext, proposedCorrection, reason]
+      properties:
+        translationRevisionId:
+          type: string
+          format: uuid
+        selectedText:
+          type: string
+          minLength: 1
+        sourceContext:
+          type: string
+          minLength: 1
+        translatedContext:
+          type: string
+          minLength: 1
+        proposedCorrection:
+          type: string
+          minLength: 1
+        reason:
+          type: string
+          minLength: 1
+    FeedbackReport:
+      type: object
+      required: [id, novelId, chapterId, translationRevisionId, selectedText, sourceContext, translatedContext, proposedCorrection, reason, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        novelId:
+          type: string
+          format: uuid
+        chapterId:
+          type: string
+          format: uuid
+        translationRevisionId:
+          type: string
+          format: uuid
+        selectedText:
+          type: string
+        sourceContext:
+          type: string
+        translatedContext:
+          type: string
+        proposedCorrection:
+          type: string
+        reason:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected, needs_review]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    MemoryInput:
+      type: object
+      required: [sourceTerm, preferredRendering, semanticScope, evidence, confidence]
+      properties:
+        sourceTerm:
+          type: string
+          minLength: 1
+        preferredRendering:
+          type: string
+          minLength: 1
+        semanticScope:
+          type: string
+          minLength: 1
+        evidence:
+          type: string
+          minLength: 1
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+    MemoryEntry:
+      allOf:
+        - $ref: '#/components/schemas/MemoryInput'
+        - type: object
+          required: [id, novelId, createdAt, updatedAt]
+          properties:
+            id:
+              type: string
+              format: uuid
+            novelId:
+              type: string
+              format: uuid
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+    FeedbackDecisionInput:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [approved, rejected, needs_review]
+        memory:
+          $ref: '#/components/schemas/MemoryInput'
+    FeedbackDecision:
+      type: object
+      required: [report, revision, memory]
+      properties:
+        report:
+          $ref: '#/components/schemas/FeedbackReport'
+        revision:
+          type: object
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/TranslationRevision'
+        memory:
+          type: object
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/MemoryEntry'
     ErrorResponse:
       type: object
       required: [error]

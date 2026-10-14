@@ -1,4 +1,4 @@
-import { ConflictError, NotFoundError, SourceFetchError, ValidationError } from '../domain/errors.js';
+import { ConflictError, NotFoundError, SourceFetchError, TranslationProviderError, ValidationError } from '../domain/errors.js';
 import { InvalidJsonError, readJson, UnsupportedMediaTypeError, writeJson } from './json.js';
 
 function errorBody(code, message, retryable, resourceId) {
@@ -23,6 +23,10 @@ function routeError(response, error, resourceId) {
   }
   if (error instanceof SourceFetchError) {
     writeJson(response, 502, errorBody('source_fetch_failed', 'Source chapter could not be fetched', true));
+    return;
+  }
+  if (error instanceof TranslationProviderError) {
+    writeJson(response, 502, errorBody('translation_provider_failed', 'Translation provider could not complete the request', true));
     return;
   }
   if (error instanceof ValidationError) {
@@ -57,7 +61,23 @@ async function handle(response, resourceId, action) {
   }
 }
 
-export function createRouter(libraryService) {
+async function readObject(request) {
+  const input = await readJson(request);
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+    throw new ValidationError('input must be an object');
+  }
+  return input;
+}
+
+function chapterResourceId(error, novelId, chapterNumber) {
+  return error instanceof NotFoundError && error.message === 'novel not found' ? novelId : chapterNumber;
+}
+
+function feedbackResourceId(error, novelId, reportId) {
+  return error instanceof NotFoundError && error.message === 'novel not found' ? novelId : reportId;
+}
+
+export function createRouter({ libraryService, translationService, feedbackVerificationService, repositories }) {
   return async function router(request, response) {
     const { method } = request;
     const { pathname } = new URL(request.url ?? '/', 'http://localhost');
@@ -108,7 +128,61 @@ export function createRouter(libraryService) {
       if (novelId === undefined) return;
       const chapterNumber = decodePathParameter(response, chapterMatch[2]);
       if (chapterNumber === undefined) return;
-      await handle(response, (error) => error instanceof NotFoundError && error.message === 'novel not found' ? novelId : chapterNumber, async () => writeJson(response, 200, libraryService.getReaderChapter(novelId, chapterNumber)));
+      await handle(response, (error) => chapterResourceId(error, novelId, chapterNumber), async () => writeJson(response, 200, libraryService.getReaderChapter(novelId, chapterNumber)));
+      return;
+    }
+
+    const translationMatch = /^\/api\/v1\/novels\/([^/]+)\/chapters\/([^/]+)\/translations$/.exec(pathname);
+    if (method === 'POST' && translationMatch) {
+      const novelId = decodePathParameter(response, translationMatch[1]);
+      if (novelId === undefined) return;
+      const chapterNumber = decodePathParameter(response, translationMatch[2]);
+      if (chapterNumber === undefined) return;
+      await handle(response, (error) => chapterResourceId(error, novelId, chapterNumber), async () => {
+        writeJson(response, 201, await translationService.translateChapter({ novelId, chapterNumber: Number(chapterNumber) }));
+      });
+      return;
+    }
+
+    const feedbackCollectionMatch = /^\/api\/v1\/novels\/([^/]+)\/chapters\/([^/]+)\/feedback$/.exec(pathname);
+    if (feedbackCollectionMatch) {
+      const novelId = decodePathParameter(response, feedbackCollectionMatch[1]);
+      if (novelId === undefined) return;
+      const chapterNumber = decodePathParameter(response, feedbackCollectionMatch[2]);
+      if (chapterNumber === undefined) return;
+      if (method === 'GET') {
+        await handle(response, (error) => chapterResourceId(error, novelId, chapterNumber), async () => {
+          const chapter = libraryService.getReaderChapter(novelId, chapterNumber);
+          writeJson(response, 200, { items: repositories.feedback.listFeedbackReports({ novelId, chapterId: chapter.id }) });
+        });
+        return;
+      }
+      if (method === 'POST') {
+        await handle(response, (error) => chapterResourceId(error, novelId, chapterNumber), async () => {
+          const chapter = libraryService.getReaderChapter(novelId, chapterNumber);
+          writeJson(response, 201, repositories.feedback.submitFeedbackReport({ ...await readObject(request), novelId, chapterId: chapter.id }));
+        });
+        return;
+      }
+    }
+
+    const feedbackDecisionMatch = /^\/api\/v1\/novels\/([^/]+)\/feedback\/([^/]+)$/.exec(pathname);
+    if (method === 'PATCH' && feedbackDecisionMatch) {
+      const novelId = decodePathParameter(response, feedbackDecisionMatch[1]);
+      if (novelId === undefined) return;
+      const reportId = decodePathParameter(response, feedbackDecisionMatch[2]);
+      if (reportId === undefined) return;
+      await handle(response, (error) => feedbackResourceId(error, novelId, reportId), async () => {
+        writeJson(response, 200, feedbackVerificationService.verifyFeedback({ ...await readObject(request), novelId, reportId }));
+      });
+      return;
+    }
+
+    const memoryMatch = /^\/api\/v1\/novels\/([^/]+)\/verified-memory$/.exec(pathname);
+    if (method === 'GET' && memoryMatch) {
+      const novelId = decodePathParameter(response, memoryMatch[1]);
+      if (novelId === undefined) return;
+      await handle(response, novelId, async () => writeJson(response, 200, { items: repositories.memory.listVerifiedMemoryEntries(novelId) }));
       return;
     }
 

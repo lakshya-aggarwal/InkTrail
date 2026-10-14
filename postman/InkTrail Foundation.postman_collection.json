@@ -7,6 +7,8 @@
   "variable": [
     { "key": "baseUrl", "value": "http://127.0.0.1:4278", "description": "Fixture-only server started by pnpm start:source-fixture." },
     { "key": "novelId", "value": "", "description": "Set by the Create novel request." },
+    { "key": "translationRevisionId", "value": "", "description": "Set by Translate source chapter." },
+    { "key": "feedbackId", "value": "", "description": "Set by Submit translation feedback." },
     { "key": "missingNovelId", "value": "missing" },
     { "key": "fixtureSourceChapterUrl", "value": "https://www.kujiang.com/book/9/906595", "description": "Canonical Kujiang identity served from test/fixtures/kujiang/chapter.html by the local fixture server." },
     { "key": "fixtureSourceFetchFailureUrl", "value": "https://www.kujiang.com/book/9/906597", "description": "Canonical Kujiang identity that the local fixture server deterministically fails." },
@@ -117,6 +119,53 @@
           "exec": ["pm.test('returns the stable fixture fetch failure', () => {", "  pm.response.to.have.status(502);", "  pm.expect(pm.response.json().error).to.deep.equal({ code: 'source_fetch_failed', message: 'Source chapter could not be fetched', retryable: true });", "});"]
         }
       }]
+    },
+    {
+      "name": "Translate source chapter",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/chapters/2491/translations"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('creates a fixture translation revision', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('translationRevisionId', pm.response.json().revision.id);"]
+        }
+      }]
+    },
+    {
+      "name": "Submit translation feedback",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"translationRevisionId\": \"{{translationRevisionId}}\",\n  \"selectedText\": \"Fixture translation 1.\",\n  \"sourceContext\": \"Fixture source context\",\n  \"translatedContext\": \"Fixture translation 1.\",\n  \"proposedCorrection\": \"Corrected fixture translation.\",\n  \"reason\": \"Verified terminology\"\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/chapters/2491/feedback"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('creates a pending feedback report', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('feedbackId', pm.response.json().id);"]
+        }
+      }]
+    },
+    {
+      "name": "List translation feedback",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/chapters/2491/feedback" }
+    },
+    {
+      "name": "Approve translation feedback",
+      "request": {
+        "method": "PATCH",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"status\": \"approved\",\n  \"memory\": {\n    \"sourceTerm\": \"fixture term\",\n    \"preferredRendering\": \"fixture term\",\n    \"semanticScope\": \"fixture\",\n    \"evidence\": \"Verified terminology\",\n    \"confidence\": 1\n  }\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/feedback/{{feedbackId}}"
+      }
+    },
+    {
+      "name": "List verified memory",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/verified-memory" }
     },
     {
       "name": "Get reader chapter",

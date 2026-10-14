@@ -21,9 +21,23 @@ async function fixtureFetch(url) {
   throw new Error('fixture source URL is not configured');
 }
 
+const fixtureTranslationProvider = {
+  provider: 'fixture',
+  model: 'fixture-model',
+  async translate({ originalChinese }) {
+    return {
+      paragraphs: originalChinese
+        .split(/\n\s*\n/)
+        .filter(Boolean)
+        .map((_, index) => `Fixture translation ${index + 1}.`)
+    };
+  }
+};
+
 const app = createApp({
   databasePath: join(mkdtempSync(join(tmpdir(), 'inktrail-source-fixture-')), 'inktrail.sqlite'),
-  fetch: fixtureFetch
+  fetch: fixtureFetch,
+  translationProvider: fixtureTranslationProvider
 });
 const port = Number(process.env.PORT ?? 4278);
 app.server.listen(port, '127.0.0.1');
