@@ -176,6 +176,57 @@ test('runs independent novels concurrently up to the global limit', async (t) =>
   runner.stop();
 });
 
+test('serializes anomalous queued jobs for one novel while another novel progresses', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const firstNovel = repositories.novels.createNovel({ title: 'First' });
+  const secondNovel = repositories.novels.createNovel({ title: 'Second' });
+  seededChapter(repositories, firstNovel, 1);
+  seededChapter(repositories, firstNovel, 2);
+  seededChapter(repositories, secondNovel, 1);
+  database.exec('drop index one_active_translation_job_per_novel');
+  const firstJob = repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  clock.advance(1);
+  const secondJob = repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [2] }, priority: 0 });
+  repositories.jobs.createTranslationJob({ novelId: secondNovel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  const releases = [];
+  const translationService = createTranslationService(repositories, (input) => new Promise((resolve) => releases.push({ input, resolve })));
+  const runner = createRunner({ repositories, clock, translationService });
+
+  await runner.start();
+  await settle();
+
+  assert.deepEqual(
+    translationService.calls
+      .filter(({ novelId }) => novelId === firstNovel.id)
+      .map(({ chapterNumber }) => chapterNumber),
+    [1]
+  );
+  assert.deepEqual(
+    translationService.calls
+      .filter(({ novelId }) => novelId === secondNovel.id)
+      .map(({ chapterNumber }) => chapterNumber),
+    [1]
+  );
+
+  releases.find(({ input }) => input.novelId === firstNovel.id).resolve();
+  await settle();
+  assert.deepEqual(
+    translationService.calls
+      .filter(({ novelId }) => novelId === firstNovel.id)
+      .map(({ chapterNumber }) => chapterNumber),
+    [1, 2]
+  );
+
+  for (const release of releases) release.resolve();
+  await settle();
+  assert.deepEqual(
+    repositories.jobs.listJobs(firstNovel.id).map(({ id, state }) => [id, state]).sort(),
+    [[firstJob.id, 'completed'], [secondJob.id, 'completed']].sort()
+  );
+  runner.stop();
+});
+
 test('a second live runner does not reclaim an unexpired claim or duplicate its revision', async (t) => {
   const { clock, database, repositories } = fixture();
   t.after(() => database.close());

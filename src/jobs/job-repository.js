@@ -154,13 +154,14 @@ export function createJobRepository(database, clock) {
   `);
   const runnableJob = database.prepare(`
     select * from jobs
-    where state = 'queued' and (next_run_at is null or next_run_at <= ?)
-    order by priority desc, created_at, id
-    limit 1
-  `);
-  const runnableJobByType = database.prepare(`
-    select * from jobs
-    where type = ? and state = 'queued' and (next_run_at is null or next_run_at <= ?)
+    where (? is null or type = ?)
+      and state = 'queued' and (next_run_at is null or next_run_at <= ?)
+      and (type <> 'translate_chapters' or not exists (
+        select 1 from jobs as active_translation
+        where active_translation.novel_id = jobs.novel_id
+          and active_translation.type = 'translate_chapters'
+          and active_translation.state = 'running'
+      ))
     order by priority desc, created_at, id
     limit 1
   `);
@@ -357,7 +358,7 @@ export function createJobRepository(database, clock) {
       if (type !== null && !jobTypes.has(type)) throw new ValidationError('job type is invalid');
       return withinTransaction(() => {
         const now = clock().toISOString();
-        const candidate = type === null ? runnableJob.get(now) : runnableJobByType.get(type, now);
+        const candidate = runnableJob.get(type, type, now);
         if (!candidate) return null;
         if (claimJob.run(now, claimToken, now, candidate.id, now).changes === 0) return null;
         const claimed = jobById.get(candidate.id);
