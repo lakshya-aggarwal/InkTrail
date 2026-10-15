@@ -158,6 +158,12 @@ export function createJobRepository(database, clock) {
     order by priority desc, created_at, id
     limit 1
   `);
+  const runnableJobByType = database.prepare(`
+    select * from jobs
+    where type = ? and state = 'queued' and (next_run_at is null or next_run_at <= ?)
+    order by priority desc, created_at, id
+    limit 1
+  `);
   const claimJob = database.prepare(`
     update jobs set state = 'running', claimed_at = ?, claim_token = ?, updated_at = ?
     where id = ? and state = 'queued' and (next_run_at is null or next_run_at <= ?)
@@ -181,6 +187,43 @@ export function createJobRepository(database, clock) {
   `);
   const attemptsForJob = database.prepare('select * from job_attempts where job_id = ? order by started_at, attempt_number, id');
   const eventsForJob = database.prepare('select * from job_events where job_id = ? order by created_at, id');
+  const sourcedUntranslatedChapters = database.prepare(`
+    select chapters.id, chapters.chapter_number
+    from chapters
+    where chapters.novel_id = ?
+      and exists (select 1 from chapter_sources where chapter_sources.chapter_id = chapters.id)
+      and not exists (select 1 from translation_revisions where translation_revisions.chapter_id = chapters.id)
+    order by chapters.chapter_number
+  `);
+  const revisionExists = database.prepare('select 1 from translation_revisions where chapter_id = ? limit 1');
+  const completedEventExists = database.prepare("select 1 from job_events where job_id = ? and chapter_id = ? and type = 'chapter_completed' limit 1");
+  const setCheckpoint = database.prepare(`
+    update jobs set current_chapter_id = ?, updated_at = ?
+    where id = ? and novel_id = ? and state = 'running' and claim_token = ?
+  `);
+  const clearCheckpoint = database.prepare(`
+    update jobs set current_chapter_id = null, updated_at = ?
+    where id = ? and novel_id = ? and state = 'running' and claim_token = ?
+  `);
+  const runningJobs = database.prepare("select * from jobs where type = 'translate_chapters' and state = 'running'");
+  const abandonStartedAttempts = database.prepare(`
+    update job_attempts set state = 'abandoned_on_recovery', finished_at = ?
+    where job_id = ? and state = 'started'
+  `);
+  const recoverJob = database.prepare(`
+    update jobs set state = ?, claimed_at = null, claim_token = null, updated_at = ?
+    where id = ? and state = 'running'
+  `);
+  const dueRetries = database.prepare(`
+    select * from jobs
+    where type = 'translate_chapters' and state = 'retrying' and next_run_at <= ?
+    order by priority desc, created_at, id
+  `);
+  const releaseRetry = database.prepare(`
+    update jobs set state = 'queued', next_run_at = null, updated_at = ?
+    where id = ? and state = 'retrying' and next_run_at <= ?
+  `);
+  const nextRetry = database.prepare("select min(next_run_at) as next_run_at from jobs where type = 'translate_chapters' and state = 'retrying'");
 
   function withinTransaction(action) {
     database.exec('begin immediate');
@@ -295,10 +338,12 @@ export function createJobRepository(database, clock) {
     },
 
     claimNextRunnable(input) {
-      const claimToken = requireId(requireObject(input).claimToken, 'claimToken');
+      const { claimToken: inputClaimToken, type = null } = requireObject(input);
+      const claimToken = requireId(inputClaimToken, 'claimToken');
+      if (type !== null && !jobTypes.has(type)) throw new ValidationError('job type is invalid');
       return withinTransaction(() => {
         const now = clock().toISOString();
-        const candidate = runnableJob.get(now);
+        const candidate = type === null ? runnableJob.get(now) : runnableJobByType.get(type, now);
         if (!candidate) return null;
         if (claimJob.run(now, claimToken, now, candidate.id, now).changes === 0) return null;
         const claimed = jobById.get(candidate.id);
@@ -384,6 +429,104 @@ export function createJobRepository(database, clock) {
         appendEvent(job, { type: 'chapter_started', message: 'Checkpoint started.', chapterId: normalizedChapterId, details: normalizedChapterId ? { chapterId: normalizedChapterId, attemptNumber: attempt.attemptNumber } : { attemptNumber: attempt.attemptNumber } });
         return toAttempt(attemptById.get(attempt.id, job.id));
       });
+    },
+
+    prepareTranslationAttempt(input) {
+      const { novelId, jobId, claimToken } = requireObject(input);
+      const id = requireNovel(novelId);
+      const token = requireId(claimToken, 'claimToken');
+      return withinTransaction(() => {
+        const job = jobInNovel.get(requireId(jobId, 'jobId'), id);
+        if (!job) throw new NotFoundError('job not found');
+        if (job.type !== 'translate_chapters' || job.state !== 'running' || job.claim_token !== token) {
+          throw new ConflictError('translation job claim is no longer active');
+        }
+
+        if (job.current_chapter_id && revisionExists.get(job.current_chapter_id)) {
+          if (!completedEventExists.get(job.id, job.current_chapter_id)) {
+            appendEvent(job, {
+              type: 'chapter_completed',
+              message: 'Recovered completed checkpoint.',
+              chapterId: job.current_chapter_id,
+              details: { chapterId: job.current_chapter_id }
+            });
+          }
+          if (clearCheckpoint.run(clock().toISOString(), job.id, id, token).changes === 0) {
+            throw new ConflictError('translation job claim is no longer active');
+          }
+        }
+
+        const refreshed = jobInNovel.get(job.id, id);
+        const chapter = sourcedUntranslatedChapters.all(id).find((candidate) => targetIncludesChapter(refreshed, candidate.chapter_number));
+        if (!chapter) return { status: 'completed' };
+
+        const nextAttemptNumber = nextAttempt.get(refreshed.id, chapter.id).attempt_number;
+        if (nextAttemptNumber > 4) return { status: 'exhausted', chapterId: chapter.id, chapterNumber: chapter.chapter_number };
+        if (setCheckpoint.run(chapter.id, clock().toISOString(), refreshed.id, id, token).changes === 0) {
+          throw new ConflictError('translation job claim is no longer active');
+        }
+        const attempt = {
+          id: randomUUID(),
+          jobId: refreshed.id,
+          novelId: id,
+          chapterId: chapter.id,
+          attemptNumber: nextAttemptNumber,
+          startedAt: clock().toISOString(),
+          claimToken: token
+        };
+        insertAttempt.run(attempt);
+        appendEvent(refreshed, {
+          type: 'chapter_started',
+          message: 'Checkpoint started.',
+          chapterId: chapter.id,
+          details: { chapterId: chapter.id, attemptNumber: attempt.attemptNumber }
+        });
+        return {
+          status: 'started',
+          chapterId: chapter.id,
+          chapterNumber: chapter.chapter_number,
+          attempt: toAttempt(attemptById.get(attempt.id, refreshed.id))
+        };
+      });
+    },
+
+    recoverStaleTranslationClaims() {
+      return withinTransaction(() => {
+        const now = clock().toISOString();
+        return runningJobs.all().flatMap((job) => {
+          abandonStartedAttempts.run(now, job.id);
+          const state = job.next_run_at === null ? 'queued' : 'retrying';
+          if (recoverJob.run(state, now, job.id).changes === 0) return [];
+          const recovered = jobById.get(job.id);
+          appendEvent(recovered, { type: 'recovered', message: 'Stale job claim recovered.', details: {} });
+          return [toJob(recovered)];
+        });
+      });
+    },
+
+    abandonPausedTranslationAttempts(input) {
+      const { novelId, jobId } = requireObject(input);
+      const id = requireNovel(novelId);
+      return withinTransaction(() => {
+        const job = jobInNovel.get(requireId(jobId, 'jobId'), id);
+        if (!job) throw new NotFoundError('job not found');
+        if (job.type !== 'translate_chapters' || job.state !== 'paused') return 0;
+        return abandonStartedAttempts.run(clock().toISOString(), job.id).changes;
+      });
+    },
+
+    releaseDueTranslationRetries() {
+      return withinTransaction(() => {
+        const now = clock().toISOString();
+        return dueRetries.all(now).flatMap((job) => {
+          if (releaseRetry.run(now, job.id, now).changes === 0) return [];
+          return [toJob(jobById.get(job.id))];
+        });
+      });
+    },
+
+    nextTranslationRetryAt() {
+      return nextRetry.get().next_run_at;
     },
 
     finishAttempt(input) {
