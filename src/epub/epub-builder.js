@@ -84,7 +84,6 @@ export function createEpubBuilder({ exports, exportRoot, writeArchive = writeEpu
     try {
       exports.transitionExport({ novelId, exportId, toState: 'building' });
       building = true;
-      await exportRoot.recoverTemporaryFiles();
       temporaryFile = exportRoot.temporaryPath(snapshot.export.fileName);
       await writeArchive({ temporaryFile, snapshot });
       const output = await exportRoot.publish({ fileName: snapshot.export.fileName, temporaryFile });

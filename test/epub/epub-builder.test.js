@@ -102,6 +102,42 @@ test('safe export root contains output, recovers temporary files, and rejects tr
   assert.throws(() => root.temporaryPath('escape.epub'), ValidationError);
 });
 
+test('concurrent builds preserve each other\'s temporary output', async (t) => {
+  const repositories = await fixture(t);
+  const firstSnapshot = repositories.exports.captureSnapshot({ novelId: repositories.novel.id, selection: { chapterNumbers: [1] } });
+  const secondSnapshot = repositories.exports.captureSnapshot({ novelId: repositories.novel.id, selection: { chapterNumbers: [2] } });
+  let firstWriteStarted;
+  const firstWriteReady = new Promise((resolve) => { firstWriteStarted = resolve; });
+  let releaseFirstWrite;
+  const firstWriteReleased = new Promise((resolve) => { releaseFirstWrite = resolve; });
+  let writes = 0;
+  const writer = async ({ temporaryFile, snapshot }) => {
+    const contents = `export:${snapshot.export.id}`;
+    await writeFile(temporaryFile, contents);
+    writes += 1;
+    if (writes === 1) {
+      firstWriteStarted();
+      await firstWriteReleased;
+    }
+  };
+  const builder = createEpubBuilder({ exports: repositories.exports, exportRoot: repositories.exportRoot, writeArchive: writer });
+
+  const firstBuild = builder.build({ novelId: repositories.novel.id, exportId: firstSnapshot.export.id });
+  await firstWriteReady;
+  const secondBuild = await builder.build({ novelId: repositories.novel.id, exportId: secondSnapshot.export.id });
+  releaseFirstWrite();
+  const firstBuildResult = await firstBuild;
+
+  const firstBytes = await readFile(repositories.exportRoot.outputPath(firstSnapshot.export.fileName));
+  const secondBytes = await readFile(repositories.exportRoot.outputPath(secondSnapshot.export.fileName));
+  assert.equal(firstBuildResult.export.state, 'available');
+  assert.equal(secondBuild.export.state, 'available');
+  assert.equal(firstBytes.toString(), `export:${firstSnapshot.export.id}`);
+  assert.equal(secondBytes.toString(), `export:${secondSnapshot.export.id}`);
+  assert.equal(firstBuildResult.export.sha256, createHash('sha256').update(firstBytes).digest('hex'));
+  assert.equal(secondBuild.export.sha256, createHash('sha256').update(secondBytes).digest('hex'));
+});
+
 test('archive failure leaves no available export or corrupt output', async (t) => {
   const repositories = await fixture(t);
   const snapshot = repositories.exports.captureSnapshot({ novelId: repositories.novel.id, selection: { chapterNumbers: [1] } });
