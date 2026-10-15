@@ -248,7 +248,7 @@ export function createJobRepository(database, clock) {
   `);
   const staleRunningJobs = database.prepare(`
     select * from jobs
-    where type = 'translate_chapters' and state = 'running'
+    where state = 'running'
       and (claimed_at is null or claimed_at <= ?)
   `);
   const renewClaim = database.prepare(`
@@ -585,7 +585,7 @@ export function createJobRepository(database, clock) {
         if (job.state === 'paused') return toJob(job);
         if (!transitions[job.state].has('paused')) throw new ConflictError('job state transition is not allowed');
         const now = clock().toISOString();
-        if (job.type === 'translate_chapters' && job.state === 'running') {
+        if (job.state === 'running') {
           abandonStartedAttempts.run(now, job.id);
         }
         const updated = {

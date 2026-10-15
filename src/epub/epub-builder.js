@@ -76,18 +76,21 @@ export async function writeEpubArchive({ temporaryFile, snapshot }) {
 }
 
 export function createEpubBuilder({ exports, exportRoot, writeArchive = writeEpubArchive }) {
-  async function build({ novelId, exportId }) {
+  async function build({ novelId, exportId, shouldContinue = () => true }) {
     const snapshot = validateExportSnapshot(exports.getExportSnapshot({ novelId, exportId }));
     let building = false;
     let temporaryFile = null;
     let published = false;
     try {
+      if (!shouldContinue()) throw new ConflictError('EPUB job claim is no longer active');
       exports.transitionExport({ novelId, exportId, toState: 'building' });
       building = true;
       temporaryFile = exportRoot.temporaryPath(snapshot.export.fileName);
       await writeArchive({ temporaryFile, snapshot });
+      if (!shouldContinue()) throw new ConflictError('EPUB job claim is no longer active');
       const output = await exportRoot.publish({ fileName: snapshot.export.fileName, temporaryFile });
       published = true;
+      if (!shouldContinue()) throw new ConflictError('EPUB job claim is no longer active');
       const exportRecord = exports.transitionExport({
         novelId,
         exportId,
@@ -99,7 +102,7 @@ export function createEpubBuilder({ exports, exportRoot, writeArchive = writeEpu
     } catch (error) {
       if (temporaryFile) await exportRoot.removeTemporary(temporaryFile);
       if (published) await exportRoot.removeOutput(snapshot.export.fileName);
-      if (building) exports.transitionExport({
+      if (building && shouldContinue()) exports.transitionExport({
         novelId,
         exportId,
         toState: 'failed',
@@ -108,6 +111,14 @@ export function createEpubBuilder({ exports, exportRoot, writeArchive = writeEpu
       });
       throw error;
     }
+  }
+
+  function reset({ novelId, exportId }) {
+    const { export: snapshot } = exports.getExportSnapshot({ novelId, exportId });
+    if (snapshot.state === 'building') {
+      return exports.transitionExport({ novelId, exportId, toState: 'queued' });
+    }
+    return snapshot;
   }
 
   async function openDownload({ novelId, exportId }) {
@@ -120,5 +131,5 @@ export function createEpubBuilder({ exports, exportRoot, writeArchive = writeEpu
     });
   }
 
-  return { build, openDownload };
+  return { build, reset, openDownload };
 }

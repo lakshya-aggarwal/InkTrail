@@ -77,10 +77,39 @@ function feedbackResourceId(error, novelId, reportId) {
   return error instanceof NotFoundError && error.message === 'novel not found' ? novelId : reportId;
 }
 
-export function createRouter({ libraryService, translationService, feedbackVerificationService, repositories }) {
+function queryValue(searchParams, name) {
+  const value = searchParams.get(name);
+  if (value === null || value.trim().length === 0) throw new ValidationError(`${name} is required`);
+  return value.trim();
+}
+
+function idempotencyKey(request) {
+  const value = request.headers['idempotency-key'];
+  if (value === undefined) return null;
+  if (Array.isArray(value) || typeof value !== 'string' || value.trim().length === 0 || value.length > 500) {
+    throw new ValidationError('Idempotency-Key is invalid');
+  }
+  return value.trim();
+}
+
+async function writeDownload(response, download, exportId) {
+  await new Promise((resolve, reject) => {
+    download.stream.once('error', reject);
+    response.once('error', reject);
+    response.once('finish', resolve);
+    response.writeHead(200, {
+      'content-type': 'application/epub+zip',
+      'content-length': download.byteSize,
+      'content-disposition': `attachment; filename="${exportId}.epub"`
+    });
+    download.stream.pipe(response);
+  });
+}
+
+export function createRouter({ libraryService, translationService, feedbackVerificationService, jobService, epubBuilder, repositories }) {
   return async function router(request, response) {
     const { method } = request;
-    const { pathname } = new URL(request.url ?? '/', 'http://localhost');
+    const { pathname, searchParams } = new URL(request.url ?? '/', 'http://localhost');
 
     if (method === 'GET' && pathname === '/api/v1/health') {
       writeJson(response, 200, { status: 'ok' });
@@ -95,11 +124,84 @@ export function createRouter({ libraryService, translationService, feedbackVerif
       return;
     }
 
+    if (pathname === '/api/v1/jobs') {
+      if (method === 'GET') {
+        await handle(response, undefined, async () => writeJson(response, 200, { items: jobService.listJobs(queryValue(searchParams, 'novelId')) }));
+        return;
+      }
+      if (method === 'POST') {
+        await handle(response, undefined, async () => {
+          const result = await jobService.createTranslationJob(await readObject(request), idempotencyKey(request));
+          writeJson(response, result.created ? 201 : 200, result.job);
+        });
+        return;
+      }
+    }
+
+    const jobMatch = /^\/api\/v1\/jobs\/([^/]+)$/.exec(pathname);
+    if (method === 'GET' && jobMatch) {
+      const jobId = decodePathParameter(response, jobMatch[1]);
+      if (jobId === undefined) return;
+      await handle(response, jobId, async () => writeJson(response, 200, jobService.getJobDetail({ novelId: queryValue(searchParams, 'novelId'), jobId })));
+      return;
+    }
+
+    const jobControlMatch = /^\/api\/v1\/jobs\/([^/]+)\/(pause|resume)$/.exec(pathname);
+    if (method === 'POST' && jobControlMatch) {
+      const jobId = decodePathParameter(response, jobControlMatch[1]);
+      if (jobId === undefined) return;
+      const action = jobControlMatch[2];
+      await handle(response, jobId, async () => {
+        const input = { novelId: queryValue(searchParams, 'novelId'), jobId };
+        const job = action === 'pause' ? jobService.pause(input) : await jobService.resume(input);
+        writeJson(response, 200, job);
+      });
+      return;
+    }
+
     const novelMatch = /^\/api\/v1\/novels\/([^/]+)$/.exec(pathname);
     if (method === 'GET' && novelMatch) {
       const novelId = decodePathParameter(response, novelMatch[1]);
       if (novelId === undefined) return;
       await handle(response, novelId, async () => writeJson(response, 200, libraryService.getNovel(novelId)));
+      return;
+    }
+
+    const exportCollectionMatch = /^\/api\/v1\/novels\/([^/]+)\/exports$/.exec(pathname);
+    if (exportCollectionMatch) {
+      const novelId = decodePathParameter(response, exportCollectionMatch[1]);
+      if (novelId === undefined) return;
+      if (method === 'GET') {
+        await handle(response, novelId, async () => writeJson(response, 200, { items: repositories.exports.listExports(novelId) }));
+        return;
+      }
+      if (method === 'POST') {
+        await handle(response, novelId, async () => {
+          const input = await readObject(request);
+          const result = await jobService.createEpubExport({ novelId, selection: input.selection }, idempotencyKey(request));
+          writeJson(response, result.created ? 201 : 200, { export: result.export, job: result.job });
+        });
+        return;
+      }
+    }
+
+    const exportMatch = /^\/api\/v1\/novels\/([^/]+)\/exports\/([^/]+)$/.exec(pathname);
+    if (method === 'GET' && exportMatch) {
+      const novelId = decodePathParameter(response, exportMatch[1]);
+      if (novelId === undefined) return;
+      const exportId = decodePathParameter(response, exportMatch[2]);
+      if (exportId === undefined) return;
+      await handle(response, exportId, async () => writeJson(response, 200, repositories.exports.getExportSnapshot({ novelId, exportId })));
+      return;
+    }
+
+    const downloadMatch = /^\/api\/v1\/novels\/([^/]+)\/exports\/([^/]+)\/download$/.exec(pathname);
+    if (method === 'GET' && downloadMatch) {
+      const novelId = decodePathParameter(response, downloadMatch[1]);
+      if (novelId === undefined) return;
+      const exportId = decodePathParameter(response, downloadMatch[2]);
+      if (exportId === undefined) return;
+      await handle(response, exportId, async () => writeDownload(response, await epubBuilder.openDownload({ novelId, exportId }), exportId));
       return;
     }
 

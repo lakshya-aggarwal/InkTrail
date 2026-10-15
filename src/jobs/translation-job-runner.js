@@ -29,7 +29,7 @@ function errorDetails(error) {
   };
 }
 
-export function createTranslationJobRunner({ jobs, translationService, clock = () => new Date(), scheduler = defaultScheduler(), concurrency = 2 }) {
+export function createTranslationJobRunner({ jobs, translationService, epubBuilder = null, clock = () => new Date(), scheduler = defaultScheduler(), concurrency = 2 }) {
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new TypeError('concurrency must be a positive integer');
   let started = false;
   let pumping = false;
@@ -61,13 +61,51 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
       active -= 1;
       void wake();
     };
-    activeProcesses.set(processKey, { novelId: job.novelId, jobId: job.id, release });
+    activeProcesses.set(processKey, { novelId: job.novelId, jobId: job.id, type: job.type, release });
     const renewLease = () => {
       if (!started || !jobs.renewTranslationClaim({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken })) return;
       leaseTimer = scheduler.schedule(TRANSLATION_JOB_LEASE_MS / 2, renewLease);
     };
     try {
       leaseTimer = scheduler.schedule(TRANSLATION_JOB_LEASE_MS / 2, renewLease);
+      if (job.type === 'build_epub') {
+        const attempt = jobs.startAttempt({ novelId: job.novelId, jobId: job.id });
+        try {
+          await epubBuilder.build({
+            novelId: job.novelId,
+            exportId: job.target.exportId,
+            shouldContinue: () => {
+              const current = jobs.getJob({ novelId: job.novelId, jobId: job.id });
+              return current.state === 'running' && current.claimToken === job.claimToken;
+            }
+          });
+          jobs.finishAttempt({ jobId: job.id, attemptId: attempt.id, claimToken: job.claimToken, state: 'succeeded' });
+          jobs.transitionJob({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken, toState: 'completed' });
+        } catch (error) {
+          try {
+            jobs.finishAttempt({
+              jobId: job.id,
+              attemptId: attempt.id,
+              claimToken: job.claimToken,
+              state: 'paused_after_failure',
+              errorCode: 'epub_build_failed',
+              errorMessage: 'EPUB export could not be built.'
+            });
+          } catch (finishError) {
+            if (finishError instanceof ConflictError) return;
+            throw finishError;
+          }
+          jobs.transitionJob({
+            novelId: job.novelId,
+            jobId: job.id,
+            claimToken: job.claimToken,
+            toState: 'failed',
+            errorCode: 'epub_build_failed',
+            errorMessage: 'EPUB export could not be built.'
+          });
+        }
+        return;
+      }
       while (started) {
         const prepared = jobs.prepareTranslationAttempt({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken });
         if (prepared.status === 'completed') {
@@ -131,7 +169,7 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
     try {
       jobs.releaseDueTranslationRetries();
       while (started && active < concurrency) {
-        const job = jobs.claimNextRunnable({ claimToken: crypto.randomUUID(), type: 'translate_chapters' });
+        const job = jobs.claimNextRunnable({ claimToken: crypto.randomUUID(), type: epubBuilder ? null : 'translate_chapters' });
         if (!job) break;
         active += 1;
         void process(job);
@@ -150,9 +188,14 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
     async start() {
       if (started) return;
       started = true;
-      jobs.recoverStaleTranslationClaims({
+      const recovered = jobs.recoverStaleTranslationClaims({
         claimedBefore: new Date(clock().getTime() - TRANSLATION_JOB_LEASE_MS).toISOString()
       });
+      if (epubBuilder) {
+        for (const job of recovered) {
+          if (job.type === 'build_epub') epubBuilder.reset({ novelId: job.novelId, exportId: job.target.exportId });
+        }
+      }
       await wake();
     },
 
@@ -168,7 +211,9 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
     },
 
     pause(input) {
+      const job = jobs.getJob(input);
       const paused = jobs.pauseTranslationJob(input);
+      if (job.type === 'build_epub') epubBuilder.reset({ novelId: job.novelId, exportId: job.target.exportId });
       for (const process of activeProcesses.values()) {
         if (process.novelId === input.novelId && process.jobId === input.jobId) process.release();
       }

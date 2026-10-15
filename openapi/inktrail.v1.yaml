@@ -317,6 +317,237 @@ paths:
           $ref: '#/components/responses/NotFound'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
+  /api/v1/jobs:
+    get:
+      operationId: listJobs
+      summary: List durable jobs for one novel
+      parameters:
+        - name: novelId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Durable job resources, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: createTranslationJob
+      summary: Queue sourced chapters for durable translation
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTranslationJobInput'
+      responses:
+        '200':
+          description: Compatible existing job returned for deduplication or idempotency replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '201':
+          description: Durable translation job queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+  /api/v1/jobs/{jobId}:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - name: novelId
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+    get:
+      operationId: getJob
+      summary: Inspect a durable job, attempts, and safe events
+      responses:
+        '200':
+          description: Durable job detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/jobs/{jobId}/pause:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - name: novelId
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+    post:
+      operationId: pauseJob
+      summary: Pause a queued, retrying, or running durable job
+      responses:
+        '200':
+          description: Persisted paused job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/jobs/{jobId}/resume:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - name: novelId
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+    post:
+      operationId: resumeJob
+      summary: Requeue a paused durable job
+      responses:
+        '200':
+          description: Persisted queued job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/novels/{novelId}/exports:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+    get:
+      operationId: listEpubExports
+      summary: List immutable EPUB exports for a novel
+      responses:
+        '200':
+          description: Export metadata, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EpubExport'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: createEpubExport
+      summary: Capture translated revisions and queue immutable EPUB generation
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEpubExportInput'
+      responses:
+        '200':
+          description: Compatible active export job returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateEpubExportResult'
+        '201':
+          description: Immutable EPUB snapshot captured and queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateEpubExportResult'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+  /api/v1/novels/{novelId}/exports/{exportId}:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+      - $ref: '#/components/parameters/ExportId'
+    get:
+      operationId: getEpubExport
+      summary: Inspect an immutable EPUB snapshot
+      responses:
+        '200':
+          description: Export metadata and captured revisions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EpubExportDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/novels/{novelId}/exports/{exportId}/download:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+      - $ref: '#/components/parameters/ExportId'
+    get:
+      operationId: downloadEpubExport
+      summary: Download an available immutable EPUB
+      responses:
+        '200':
+          description: EPUB download
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+          content:
+            application/epub+zip:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 components:
   parameters:
     NovelId:
@@ -340,6 +571,28 @@ components:
       schema:
         type: string
         minLength: 1
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ExportId:
+      name: exportId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 500
   responses:
     ValidationError:
       description: Invalid request data or malformed JSON
@@ -782,6 +1035,264 @@ components:
           nullable: true
           allOf:
             - $ref: '#/components/schemas/MemoryEntry'
+    ChapterSelection:
+      oneOf:
+        - type: object
+          required: [startChapterNumber, endChapterNumber]
+          properties:
+            startChapterNumber:
+              type: integer
+              minimum: 1
+            endChapterNumber:
+              type: integer
+              minimum: 1
+        - type: object
+          required: [chapterNumbers]
+          properties:
+            chapterNumbers:
+              type: array
+              minItems: 1
+              items:
+                type: integer
+                minimum: 1
+              description: Strictly ascending unique chapter numbers.
+    CreateTranslationJobInput:
+      type: object
+      required: [novelId, type, target]
+      properties:
+        novelId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [translate_chapters]
+        target:
+          $ref: '#/components/schemas/ChapterSelection'
+    Job:
+      type: object
+      required: [id, novelId, type, target, state, priority, attemptCount, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        novelId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [translate_chapters, build_epub]
+        target:
+          oneOf:
+            - $ref: '#/components/schemas/ChapterSelection'
+            - type: object
+              required: [exportId]
+              properties:
+                exportId:
+                  type: string
+                  format: uuid
+        state:
+          type: string
+          enum: [queued, running, retrying, paused, failed, completed]
+        priority:
+          type: integer
+        attemptCount:
+          type: integer
+          minimum: 0
+        nextRunAt:
+          type: string
+          format: date-time
+          nullable: true
+        currentChapterId:
+          type: string
+          format: uuid
+          nullable: true
+        lastErrorCode:
+          type: string
+          nullable: true
+        lastErrorMessage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+    JobAttempt:
+      type: object
+      required: [id, jobId, novelId, attemptNumber, state, startedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        jobId:
+          type: string
+          format: uuid
+        novelId:
+          type: string
+          format: uuid
+        chapterId:
+          type: string
+          format: uuid
+          nullable: true
+        attemptNumber:
+          type: integer
+          minimum: 1
+        state:
+          type: string
+          enum: [started, succeeded, retryable_failed, paused_after_failure, abandoned_on_recovery]
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        errorCode:
+          type: string
+          nullable: true
+        errorMessage:
+          type: string
+          nullable: true
+    JobEvent:
+      type: object
+      required: [id, jobId, novelId, type, message, details, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        jobId:
+          type: string
+          format: uuid
+        novelId:
+          type: string
+          format: uuid
+        chapterId:
+          type: string
+          format: uuid
+          nullable: true
+        type:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+    JobDetail:
+      type: object
+      required: [job, attempts, events]
+      properties:
+        job:
+          $ref: '#/components/schemas/Job'
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobAttempt'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobEvent'
+    CreateEpubExportInput:
+      type: object
+      required: [selection]
+      properties:
+        selection:
+          $ref: '#/components/schemas/ChapterSelection'
+    EpubExport:
+      type: object
+      required: [id, novelId, state, selection, snapshotAt, fileName, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        novelId:
+          type: string
+          format: uuid
+        jobId:
+          type: string
+          format: uuid
+          nullable: true
+        state:
+          type: string
+          enum: [queued, building, available, failed]
+        selection:
+          $ref: '#/components/schemas/ChapterSelection'
+        snapshotAt:
+          type: string
+          format: date-time
+        fileName:
+          type: string
+        byteSize:
+          type: integer
+          minimum: 0
+          nullable: true
+        sha256:
+          type: string
+          nullable: true
+        lastErrorCode:
+          type: string
+          nullable: true
+        lastErrorMessage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+    EpubExportChapter:
+      type: object
+      required: [exportId, chapterId, translationRevisionId, chapterNumber, title, sourceUrl, ordinal]
+      properties:
+        exportId:
+          type: string
+          format: uuid
+        chapterId:
+          type: string
+          format: uuid
+        translationRevisionId:
+          type: string
+          format: uuid
+        chapterNumber:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+        sourceUrl:
+          type: string
+          format: uri
+        ordinal:
+          type: integer
+          minimum: 1
+    EpubExportDetail:
+      type: object
+      required: [export, chapters]
+      properties:
+        export:
+          $ref: '#/components/schemas/EpubExport'
+        chapters:
+          type: array
+          items:
+            $ref: '#/components/schemas/EpubExportChapter'
+    CreateEpubExportResult:
+      type: object
+      required: [export, job]
+      properties:
+        export:
+          $ref: '#/components/schemas/EpubExport'
+        job:
+          $ref: '#/components/schemas/Job'
     ErrorResponse:
       type: object
       required: [error]

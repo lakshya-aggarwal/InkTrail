@@ -5,7 +5,7 @@ import { ConflictError, NotFoundError, ValidationError } from '../domain/errors.
 const exportStates = new Set(['queued', 'building', 'available', 'failed']);
 const exportTransitions = {
   queued: new Set(['building', 'failed']),
-  building: new Set(['available', 'failed']),
+  building: new Set(['queued', 'available', 'failed']),
   available: new Set(),
   failed: new Set()
 };

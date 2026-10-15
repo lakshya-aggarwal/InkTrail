@@ -1,11 +1,18 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { createChapterRepository } from './chapters/chapter-repository.js';
 import { openDatabase } from './db/database.js';
 import { migrate } from './db/migrate.js';
 import { createFeedbackRepository } from './feedback/feedback-repository.js';
 import { createFeedbackVerificationService } from './feedback/feedback-verification-service.js';
+import { createEpubBuilder, writeEpubArchive } from './epub/epub-builder.js';
+import { createExportRepository } from './epub/export-repository.js';
+import { createExportRoot } from './epub/export-root.js';
 import { createRouter } from './http/router.js';
+import { createJobRepository } from './jobs/job-repository.js';
+import { createJobService } from './jobs/job-service.js';
+import { createTranslationJobRunner } from './jobs/translation-job-runner.js';
 import { createMemoryRepository } from './memory/memory-repository.js';
 import { createNovelRepository } from './novels/novel-repository.js';
 import { createProgressRepository } from './reading/progress-repository.js';
@@ -33,7 +40,7 @@ async function serveBrowserAsset(request, response) {
   return true;
 }
 
-export function createApp({ databasePath, fetch = globalThis.fetch, translationProvider = createOllamaTranslationProvider({ fetch }) }) {
+export async function createApp({ databasePath, exportRoot = join(dirname(databasePath), 'exports'), fetch = globalThis.fetch, translationProvider = createOllamaTranslationProvider({ fetch }), writeEpubArchive: archiveWriter = writeEpubArchive }) {
   const database = openDatabase({ databasePath });
   try {
     migrate(database);
@@ -49,18 +56,38 @@ export function createApp({ databasePath, fetch = globalThis.fetch, translationP
     sources: createSourceRepository(database, clock),
     findings: createQualityFindingRepository(database, clock),
     memory: createMemoryRepository(database, clock),
-    feedback: createFeedbackRepository(database, clock)
+    feedback: createFeedbackRepository(database, clock),
+    jobs: createJobRepository(database, clock),
+    exports: createExportRepository(database, clock)
   };
+  const exports = createExportRoot({ exportRoot });
+  try {
+    await exports.recoverTemporaryFiles();
+  } catch (error) {
+    database.close();
+    throw error;
+  }
   const sourceImportService = createSourceImportService({
     database,
     repositories,
     adapterRegistry: createAdapterRegistry([createKujiangAdapter({ fetch })]),
     clock
   });
+  const translationService = createTranslationService({ database, repositories, provider: translationProvider });
+  const epubBuilder = createEpubBuilder({ exports: repositories.exports, exportRoot: exports, writeArchive: archiveWriter });
+  const runner = createTranslationJobRunner({
+    jobs: repositories.jobs,
+    translationService,
+    epubBuilder,
+    clock
+  });
+  await runner.start();
   const router = createRouter({
     libraryService: createLibraryService(repositories, sourceImportService),
-    translationService: createTranslationService({ database, repositories, provider: translationProvider }),
+    translationService,
     feedbackVerificationService: createFeedbackVerificationService({ database, repositories }),
+    jobService: createJobService({ jobs: repositories.jobs, exports: repositories.exports, runner }),
+    epubBuilder,
     repositories
   });
   const server = createServer(async (request, response) => {
@@ -71,13 +98,17 @@ export function createApp({ databasePath, fetch = globalThis.fetch, translationP
   return {
     server,
     sourceImportService,
-    close: () => new Promise((resolve, reject) => server.close((error) => {
-      database.close();
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    }))
+    runner,
+    close: () => new Promise((resolve, reject) => {
+      runner.stop();
+      server.close((error) => {
+        database.close();
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    })
   };
 }

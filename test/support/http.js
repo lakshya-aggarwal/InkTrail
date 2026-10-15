@@ -1,4 +1,7 @@
 import { once } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createApp } from '../../src/app.js';
 
 const fixtureTranslationProvider = {
@@ -14,8 +17,9 @@ const fixtureTranslationProvider = {
   }
 };
 
-export async function startTestApp({ databasePath = ':memory:', fetch: sourceFetch, translationProvider = fixtureTranslationProvider } = {}) {
-  const app = createApp({ databasePath, fetch: sourceFetch, translationProvider });
+export async function startTestApp({ databasePath = ':memory:', fetch: sourceFetch, translationProvider = fixtureTranslationProvider, writeEpubArchive } = {}) {
+  const directory = await mkdtemp(join(tmpdir(), 'inktrail-http-'));
+  const app = await createApp({ databasePath, exportRoot: join(directory, 'exports'), fetch: sourceFetch, translationProvider, writeEpubArchive });
   app.server.listen(0, '127.0.0.1');
   await once(app.server, 'listening');
   const { port } = app.server.address();
@@ -23,6 +27,9 @@ export async function startTestApp({ databasePath = ':memory:', fetch: sourceFet
 
   return {
     request: (path, options) => globalThis.fetch(`${baseUrl}${path}`, options),
-    close: app.close
+    close: async () => {
+      await app.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   };
 }

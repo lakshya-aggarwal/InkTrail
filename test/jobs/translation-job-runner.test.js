@@ -126,6 +126,34 @@ function createRunner({ repositories, clock, translationService, concurrency = 2
   });
 }
 
+test('startup recovery resets a recovered EPUB snapshot before claiming work', async () => {
+  const clock = createClock();
+  const resets = [];
+  const jobs = {
+    recoverStaleTranslationClaims() {
+      return [{ id: 'build-job', novelId: 'novel', type: 'build_epub', target: { exportId: 'export' } }];
+    },
+    releaseDueTranslationRetries() {},
+    claimNextRunnable() {
+      return null;
+    },
+    nextTranslationRetryAt() {
+      return null;
+    }
+  };
+  const runner = createTranslationJobRunner({
+    jobs,
+    translationService: { async translateChapter() {} },
+    epubBuilder: { reset(input) { resets.push(input); } },
+    clock: clock.now,
+    scheduler: createScheduler(clock)
+  });
+
+  await runner.start();
+
+  assert.deepEqual(resets, [{ novelId: 'novel', exportId: 'export' }]);
+});
+
 test('serializes selected chapters for one novel in ascending order', async (t) => {
   const { clock, database, repositories } = fixture();
   t.after(() => database.close());

@@ -34,7 +34,7 @@ const fixtureTranslationProvider = {
   }
 };
 
-const app = createApp({
+const app = await createApp({
   databasePath: join(mkdtempSync(join(tmpdir(), 'inktrail-source-fixture-')), 'inktrail.sqlite'),
   fetch: fixtureFetch,
   translationProvider: fixtureTranslationProvider
