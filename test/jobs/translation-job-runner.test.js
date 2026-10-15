@@ -227,6 +227,50 @@ test('serializes anomalous queued jobs for one novel while another novel progres
   runner.stop();
 });
 
+test('keeps a retrying chapter ahead of anomalous queued work for its novel', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const firstNovel = repositories.novels.createNovel({ title: 'Retry order' });
+  const secondNovel = repositories.novels.createNovel({ title: 'Other novel' });
+  seededChapter(repositories, firstNovel, 1);
+  seededChapter(repositories, firstNovel, 2);
+  seededChapter(repositories, secondNovel, 1);
+  database.exec('drop index one_active_translation_job_per_novel');
+  repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  clock.advance(1);
+  repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [2] }, priority: 0 });
+  repositories.jobs.createTranslationJob({ novelId: secondNovel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  let retried = false;
+  const translationService = createTranslationService(repositories, async ({ novelId, chapterNumber }) => {
+    if (novelId === firstNovel.id && chapterNumber === 1 && !retried) {
+      retried = true;
+      throw new TranslationProviderError('offline');
+    }
+  });
+  const scheduler = createScheduler(clock);
+  const runner = createTranslationJobRunner({ jobs: repositories.jobs, translationService, clock: clock.now, scheduler });
+
+  await runner.start();
+  await settle();
+
+  assert.deepEqual(translationService.calls.map(({ novelId, chapterNumber }) => [novelId, chapterNumber]), [
+    [firstNovel.id, 1],
+    [secondNovel.id, 1]
+  ]);
+  assert.equal(repositories.jobs.listJobs(firstNovel.id).find(({ state }) => state === 'retrying').currentChapterId !== null, true);
+
+  await scheduler.advance(15_000);
+  await settle();
+
+  assert.deepEqual(
+    translationService.calls
+      .filter(({ novelId }) => novelId === firstNovel.id)
+      .map(({ chapterNumber }) => chapterNumber),
+    [1, 1, 2]
+  );
+  runner.stop();
+});
+
 test('a second live runner does not reclaim an unexpired claim or duplicate its revision', async (t) => {
   const { clock, database, repositories } = fixture();
   t.after(() => database.close());

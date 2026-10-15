@@ -160,7 +160,7 @@ export function createJobRepository(database, clock) {
         select 1 from jobs as active_translation
         where active_translation.novel_id = jobs.novel_id
           and active_translation.type = 'translate_chapters'
-          and active_translation.state = 'running'
+          and active_translation.state in ('running', 'retrying')
       ))
     order by priority desc, created_at, id
     limit 1
