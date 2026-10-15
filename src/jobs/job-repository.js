@@ -174,6 +174,7 @@ export function createJobRepository(database, clock) {
       current_chapter_id = @currentChapterId, last_error_code = @lastErrorCode,
       last_error_message = @lastErrorMessage, updated_at = @updatedAt, completed_at = @completedAt
     where id = @id and novel_id = @novelId and state = @fromState
+      and (@expectedClaimToken is null or claim_token = @expectedClaimToken)
   `);
   const attemptById = database.prepare('select * from job_attempts where id = ? and job_id = ?');
   const nextAttempt = database.prepare('select coalesce(max(attempt_number), 0) + 1 as attempt_number from job_attempts where job_id = ? and chapter_id is ?');
@@ -361,8 +362,9 @@ export function createJobRepository(database, clock) {
     },
 
     transitionJob(input) {
-      const { novelId, jobId, toState, nextRunAt = null, currentChapterId = null, errorCode = null, errorMessage = null } = requireObject(input);
+      const { novelId, jobId, toState, nextRunAt = null, currentChapterId = null, errorCode = null, errorMessage = null, claimToken = null } = requireObject(input);
       const id = requireNovel(novelId);
+      const expectedClaimToken = claimToken === null ? null : requireId(claimToken, 'claimToken');
       if (!jobStates.has(toState)) throw new ValidationError('job state is invalid');
       return withinTransaction(() => {
         const job = jobInNovel.get(requireId(jobId, 'jobId'), id);
@@ -376,6 +378,7 @@ export function createJobRepository(database, clock) {
           novelId: id,
           fromState: job.state,
           state: toState,
+          expectedClaimToken,
           nextRunAt: nextRunAt === null ? null : requireId(nextRunAt, 'nextRunAt'),
           claimedAt: toState === 'running' ? job.claimed_at : null,
           claimToken: toState === 'running' ? job.claim_token : null,

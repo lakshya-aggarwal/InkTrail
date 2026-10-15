@@ -57,11 +57,11 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
       while (started) {
         const prepared = jobs.prepareTranslationAttempt({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken });
         if (prepared.status === 'completed') {
-          jobs.transitionJob({ novelId: job.novelId, jobId: job.id, toState: 'completed' });
+          jobs.transitionJob({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken, toState: 'completed' });
           return;
         }
         if (prepared.status === 'exhausted') {
-          jobs.transitionJob({ novelId: job.novelId, jobId: job.id, toState: 'paused', currentChapterId: prepared.chapterId, errorCode: 'RetryExhausted', errorMessage: 'Translation retry limit reached.' });
+          jobs.transitionJob({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken, toState: 'paused', currentChapterId: prepared.chapterId, errorCode: 'RetryExhausted', errorMessage: 'Translation retry limit reached.' });
           return;
         }
 
@@ -88,14 +88,16 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
           }
           if (retryable && !exhausted) {
             const nextRunAt = retryAt(clock);
-            jobs.transitionJob({ novelId: job.novelId, jobId: job.id, toState: 'retrying', currentChapterId: prepared.chapterId, nextRunAt, errorCode: details.code, errorMessage: details.message });
+            jobs.transitionJob({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken, toState: 'retrying', currentChapterId: prepared.chapterId, nextRunAt, errorCode: details.code, errorMessage: details.message });
             scheduleWake(nextRunAt);
             return;
           }
-          jobs.transitionJob({ novelId: job.novelId, jobId: job.id, toState: retryable ? 'paused' : 'failed', currentChapterId: prepared.chapterId, errorCode: details.code, errorMessage: details.message });
+          jobs.transitionJob({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken, toState: retryable ? 'paused' : 'failed', currentChapterId: prepared.chapterId, errorCode: details.code, errorMessage: details.message });
           return;
         }
       }
+    } catch (error) {
+      if (!(error instanceof ConflictError)) throw error;
     } finally {
       if (leaseTimer !== null) scheduler.cancel(leaseTimer);
       active -= 1;

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createChapterRepository } from '../../src/chapters/chapter-repository.js';
 import { openDatabase } from '../../src/db/database.js';
 import { migrate } from '../../src/db/migrate.js';
-import { TranslationProviderError } from '../../src/domain/errors.js';
+import { ConflictError, TranslationProviderError } from '../../src/domain/errors.js';
 import { createJobRepository } from '../../src/jobs/job-repository.js';
 import { createTranslationJobRunner, TRANSLATION_JOB_LEASE_MS } from '../../src/jobs/translation-job-runner.js';
 import { createNovelRepository } from '../../src/novels/novel-repository.js';
@@ -274,6 +274,66 @@ test('persists only stable safe failure metadata', async (t) => {
   assert.deepEqual([stored.lastErrorCode, stored.lastErrorMessage], ['translation_provider_unavailable', 'Translation provider is unavailable.']);
   assert.equal(JSON.stringify({ attempt, stored }).includes(secret), false);
   runner.stop();
+});
+
+test('an expired worker cannot overwrite a reclaimer claim or its job state', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Claim transition' });
+  seededChapter(repositories, novel, 1);
+  const job = repositories.jobs.createTranslationJob({ novelId: novel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  const scheduler = createScheduler(clock);
+  const providerFailure = new TranslationProviderError('offline');
+  const translationService = createTranslationService(repositories, async () => { throw providerFailure; });
+  let secondRunner;
+  let reclaimerState;
+  const secondRunnerJobs = {
+    ...repositories.jobs,
+    prepareTranslationAttempt(input) {
+      reclaimerState = repositories.jobs.getJob({ novelId: input.novelId, jobId: input.jobId });
+      throw new ConflictError('hold reclaimed worker');
+    }
+  };
+  const firstRunnerJobs = {
+    ...repositories.jobs,
+    finishAttempt(input) {
+      const attempt = repositories.jobs.finishAttempt(input);
+      clock.advance(TRANSLATION_JOB_LEASE_MS);
+      secondRunner = createTranslationJobRunner({
+        jobs: secondRunnerJobs,
+        translationService,
+        clock: clock.now,
+        scheduler: createScheduler(clock)
+      });
+      void secondRunner.start();
+      return attempt;
+    }
+  };
+  const firstRunner = createTranslationJobRunner({ jobs: firstRunnerJobs, translationService, clock: clock.now, scheduler });
+
+  await firstRunner.start();
+  await settle();
+
+  const after = repositories.jobs.getJob({ novelId: novel.id, jobId: job.id });
+  assert.deepEqual(
+    {
+      state: after.state,
+      currentChapterId: after.currentChapterId,
+      lastErrorCode: after.lastErrorCode,
+      lastErrorMessage: after.lastErrorMessage,
+      claimToken: after.claimToken
+    },
+    {
+      state: reclaimerState.state,
+      currentChapterId: reclaimerState.currentChapterId,
+      lastErrorCode: reclaimerState.lastErrorCode,
+      lastErrorMessage: reclaimerState.lastErrorMessage,
+      claimToken: reclaimerState.claimToken
+    }
+  );
+  assert.equal(after.claimToken === null, false);
+  firstRunner.stop();
+  secondRunner.stop();
 });
 
 test('recovers stale running claims without duplicating a completed checkpoint', async (t) => {
