@@ -33,7 +33,9 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new TypeError('concurrency must be a positive integer');
   let started = false;
   let pumping = false;
+  let wakePending = false;
   let active = 0;
+  const activeProcesses = new Map();
   let timer = null;
 
   function scheduleWake(at) {
@@ -48,6 +50,18 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
 
   async function process(job) {
     let leaseTimer = null;
+    let released = false;
+    const processKey = `${job.id}:${job.claimToken}`;
+    const release = () => {
+      if (released) return;
+      released = true;
+      if (leaseTimer !== null) scheduler.cancel(leaseTimer);
+      leaseTimer = null;
+      activeProcesses.delete(processKey);
+      active -= 1;
+      void wake();
+    };
+    activeProcesses.set(processKey, { novelId: job.novelId, jobId: job.id, release });
     const renewLease = () => {
       if (!started || !jobs.renewTranslationClaim({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken })) return;
       leaseTimer = scheduler.schedule(TRANSLATION_JOB_LEASE_MS / 2, renewLease);
@@ -103,14 +117,16 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
     } catch (error) {
       if (!(error instanceof ConflictError)) throw error;
     } finally {
-      if (leaseTimer !== null) scheduler.cancel(leaseTimer);
-      active -= 1;
-      void wake();
+      release();
     }
   }
 
   async function wake() {
-    if (!started || pumping) return;
+    if (!started) return;
+    if (pumping) {
+      wakePending = true;
+      return;
+    }
     pumping = true;
     try {
       jobs.releaseDueTranslationRetries();
@@ -123,6 +139,10 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
       scheduleWake(jobs.nextTranslationRetryAt());
     } finally {
       pumping = false;
+      if (wakePending) {
+        wakePending = false;
+        void wake();
+      }
     }
   }
 
@@ -138,6 +158,7 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
 
     stop() {
       started = false;
+      wakePending = false;
       if (timer !== null) scheduler.cancel(timer);
       timer = null;
     },
@@ -147,7 +168,11 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
     },
 
     pause(input) {
-      return jobs.pauseTranslationJob(input);
+      const paused = jobs.pauseTranslationJob(input);
+      for (const process of activeProcesses.values()) {
+        if (process.novelId === input.novelId && process.jobId === input.jobId) process.release();
+      }
+      return paused;
     },
 
     async resume(input) {

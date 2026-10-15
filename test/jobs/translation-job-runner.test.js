@@ -404,6 +404,61 @@ test('pauses an in-flight translation without leaving a started attempt and resu
   runner.stop();
 });
 
+test('releases capacity after pausing an in-flight provider call without double-releasing on late completion', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const firstNovel = repositories.novels.createNovel({ title: 'Blocked' });
+  const secondNovel = repositories.novels.createNovel({ title: 'Available' });
+  const thirdNovel = repositories.novels.createNovel({ title: 'Capacity check one' });
+  const fourthNovel = repositories.novels.createNovel({ title: 'Capacity check two' });
+  const firstChapter = seededChapter(repositories, firstNovel, 1);
+  const secondChapter = seededChapter(repositories, secondNovel, 1);
+  seededChapter(repositories, thirdNovel, 1);
+  seededChapter(repositories, fourthNovel, 1);
+  const firstJob = repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [1] }, priority: 1 });
+  const secondJob = repositories.jobs.createTranslationJob({ novelId: secondNovel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  let providerCalls = 0;
+  let releaseFirst;
+  const translationService = createSharedTranslationService({
+    database,
+    repositories,
+    provider: {
+      provider: 'fake',
+      model: 'fake',
+      async translate() {
+        providerCalls += 1;
+        if (providerCalls === 1) return new Promise((resolve) => { releaseFirst = () => resolve({ paragraphs: ['Late first'] }); });
+        if (providerCalls === 2) return { paragraphs: ['Second completed'] };
+        return new Promise(() => {});
+      }
+    },
+    qualityChecker: () => []
+  });
+  const runner = createRunner({ repositories, clock, translationService, concurrency: 1 });
+
+  await runner.start();
+  await settle();
+  assert.equal(providerCalls, 1);
+
+  runner.pause({ novelId: firstNovel.id, jobId: firstJob.id });
+  await settle();
+  assert.equal(providerCalls, 2);
+  assert.equal(repositories.jobs.getJob({ novelId: secondNovel.id, jobId: secondJob.id }).state, 'completed');
+  assert.equal(repositories.chapters.listTranslationRevisions(secondChapter.id).length, 1);
+
+  releaseFirst();
+  await settle();
+  assert.equal(repositories.jobs.getJob({ novelId: firstNovel.id, jobId: firstJob.id }).state, 'paused');
+  assert.equal(repositories.chapters.listTranslationRevisions(firstChapter.id).length, 0);
+
+  repositories.jobs.createTranslationJob({ novelId: thirdNovel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  repositories.jobs.createTranslationJob({ novelId: fourthNovel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  await runner.wake();
+  await settle();
+  assert.equal(providerCalls, 3);
+  runner.stop();
+});
+
 test('persists only stable safe failure metadata', async (t) => {
   const { clock, database, repositories } = fixture();
   t.after(() => database.close());
