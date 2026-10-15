@@ -385,6 +385,53 @@ test('only the current claim can append a translation after a stale provider cal
   second.stop();
 });
 
+test('completes a job checkpoint without replacing a direct translation that finishes during provider wait', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Direct wins' });
+  const chapter = seededChapter(repositories, novel, 1);
+  const job = repositories.jobs.createTranslationJob({ novelId: novel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  const releases = [];
+  const translationService = createSharedTranslationService({
+    database,
+    repositories,
+    provider: {
+      provider: 'fake',
+      model: 'fake',
+      async translate() {
+        return new Promise((resolve) => releases.push(resolve));
+      }
+    },
+    qualityChecker: () => [{ kind: 'forced_check', details: 'Forced quality check.' }]
+  });
+  const runner = createRunner({ repositories, clock, translationService });
+
+  await runner.start();
+  await settle();
+  assert.equal(releases.length, 1);
+  const direct = translationService.translateChapter({ novelId: novel.id, chapterNumber: 1 });
+  await settle();
+  assert.equal(releases.length, 2);
+
+  releases[1]({ paragraphs: ['Direct translation.'] });
+  const directResult = await direct;
+  releases[0]({ paragraphs: ['Job translation.'] });
+  await settle();
+
+  assert.deepEqual(
+    repositories.chapters.listTranslationRevisions(chapter.id).map(({ translatedText }) => translatedText),
+    ['Direct translation.']
+  );
+  assert.equal(database.prepare('select count(*) as count from translation_quality_findings').get().count, 1);
+  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).state, 'completed');
+  assert.deepEqual(
+    repositories.jobs.listJobAttempts({ novelId: novel.id, jobId: job.id }).map(({ state }) => state),
+    ['succeeded']
+  );
+  assert.equal(directResult.revision.translatedText, 'Direct translation.');
+  runner.stop();
+});
+
 test('recovers stale running claims without duplicating a completed checkpoint', async (t) => {
   const { clock, database, repositories } = fixture();
   t.after(() => database.close());

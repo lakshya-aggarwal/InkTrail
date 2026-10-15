@@ -35,6 +35,10 @@ export function createTranslationService({ database, repositories, provider, qua
             claimToken: claim.claimToken,
             chapterId: chapter.id
           });
+          const revision = repositories.chapters.listTranslationRevisions(chapter.id).at(-1);
+          if (revision) {
+            return { status: 'checkpoint_complete', revision, findings: [] };
+          }
         }
         const revision = repositories.chapters.addTranslationRevision({
           chapterId: chapter.id,

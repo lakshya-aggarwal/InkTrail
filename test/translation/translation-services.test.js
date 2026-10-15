@@ -6,6 +6,7 @@ import { migrate } from '../../src/db/migrate.js';
 import { ConflictError, TranslationProviderError } from '../../src/domain/errors.js';
 import { createFeedbackRepository } from '../../src/feedback/feedback-repository.js';
 import { createFeedbackVerificationService } from '../../src/feedback/feedback-verification-service.js';
+import { createJobRepository } from '../../src/jobs/job-repository.js';
 import { createMemoryRepository } from '../../src/memory/memory-repository.js';
 import { createNovelRepository } from '../../src/novels/novel-repository.js';
 import { createSourceRepository } from '../../src/sources/source-repository.js';
@@ -22,6 +23,7 @@ function fixture() {
     sources: createSourceRepository(database, clock),
     findings: createQualityFindingRepository(database, clock),
     memory: createMemoryRepository(database, clock),
+    jobs: createJobRepository(database, clock),
     feedback: createFeedbackRepository(database, clock)
   };
   return { database, repositories };
@@ -126,6 +128,40 @@ test('translates sourced chapters with bounded prior context and verified novel 
   assert.deepEqual(request.priorContext, ['Earlier source text 2', 'Earlier source text 3', 'Earlier source text 4']);
   assert.deepEqual(request.verifiedMemory.map(({ preferredRendering }) => preferredRendering), ['senior brother']);
   assert.deepEqual(repositories.chapters.listTranslationRevisions(chapter.id), [result.revision]);
+});
+
+test('skips a claim-bound translation when a direct translation already completed its checkpoint', async (t) => {
+  const { database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Claim checkpoint' });
+  const chapter = seededChapter(repositories, novel, 1);
+  const job = repositories.jobs.createTranslationJob({ novelId: novel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  const claim = repositories.jobs.claimNextRunnable({ claimToken: 'claim-token', type: 'translate_chapters' });
+  repositories.jobs.prepareTranslationAttempt({ novelId: novel.id, jobId: job.id, claimToken: claim.claimToken });
+  const translate = createTranslationService({
+    database,
+    repositories,
+    provider: provider(['Translation.']),
+    qualityChecker: () => [{ kind: 'forced_check', details: 'Forced quality check.' }]
+  });
+
+  const direct = await translate.translateChapter({ novelId: novel.id, chapterNumber: 1 });
+  const skipped = await translate.translateChapter({
+    novelId: novel.id,
+    chapterNumber: 1,
+    claim: { jobId: job.id, claimToken: claim.claimToken }
+  });
+  const anotherDirect = await translate.translateChapter({ novelId: novel.id, chapterNumber: 1 });
+
+  assert.equal(skipped.status, 'checkpoint_complete');
+  assert.deepEqual(skipped.revision, direct.revision);
+  assert.deepEqual(skipped.findings, []);
+  assert.deepEqual(
+    repositories.chapters.listTranslationRevisions(chapter.id).map(({ revision }) => revision),
+    [1, 2]
+  );
+  assert.equal(anotherDirect.revision.revision, 2);
+  assert.equal(database.prepare('select count(*) as count from translation_quality_findings').get().count, 2);
 });
 
 test('preserves a provider error without persisting a partial revision', async (t) => {
