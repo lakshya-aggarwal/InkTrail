@@ -162,6 +162,19 @@ export function createJobRepository(database, clock) {
           and active_translation.type = 'translate_chapters'
           and active_translation.state in ('running', 'retrying')
       ))
+      and (type <> 'translate_chapters' or not exists (
+        select 1 from jobs as earlier_translation
+        where earlier_translation.novel_id = jobs.novel_id
+          and earlier_translation.type = 'translate_chapters'
+          and earlier_translation.state = 'queued'
+          and coalesce(
+            json_extract(earlier_translation.target_json, '$.chapterNumbers[0]'),
+            json_extract(earlier_translation.target_json, '$.startChapterNumber')
+          ) < coalesce(
+            json_extract(jobs.target_json, '$.chapterNumbers[0]'),
+            json_extract(jobs.target_json, '$.startChapterNumber')
+          )
+      ))
     order by priority desc, created_at, id
     limit 1
   `);

@@ -176,7 +176,7 @@ test('runs independent novels concurrently up to the global limit', async (t) =>
   runner.stop();
 });
 
-test('serializes anomalous queued jobs for one novel while another novel progresses', async (t) => {
+test('claims the lowest anomalous same-novel chapter before priority while another novel progresses', async (t) => {
   const { clock, database, repositories } = fixture();
   t.after(() => database.close());
   const firstNovel = repositories.novels.createNovel({ title: 'First' });
@@ -185,9 +185,9 @@ test('serializes anomalous queued jobs for one novel while another novel progres
   seededChapter(repositories, firstNovel, 2);
   seededChapter(repositories, secondNovel, 1);
   database.exec('drop index one_active_translation_job_per_novel');
-  const firstJob = repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  const secondJob = repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [2] }, priority: 100 });
   clock.advance(1);
-  const secondJob = repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [2] }, priority: 0 });
+  const firstJob = repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [1] }, priority: 0 });
   repositories.jobs.createTranslationJob({ novelId: secondNovel.id, target: { chapterNumbers: [1] }, priority: 0 });
   const releases = [];
   const translationService = createTranslationService(repositories, (input) => new Promise((resolve) => releases.push({ input, resolve })));
