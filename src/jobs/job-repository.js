@@ -550,14 +550,37 @@ export function createJobRepository(database, clock) {
       });
     },
 
-    abandonPausedTranslationAttempts(input) {
+    pauseTranslationJob(input) {
       const { novelId, jobId } = requireObject(input);
       const id = requireNovel(novelId);
       return withinTransaction(() => {
         const job = jobInNovel.get(requireId(jobId, 'jobId'), id);
         if (!job) throw new NotFoundError('job not found');
-        if (job.type !== 'translate_chapters' || job.state !== 'paused') return 0;
-        return abandonStartedAttempts.run(clock().toISOString(), job.id).changes;
+        if (job.state === 'paused') return toJob(job);
+        if (!transitions[job.state].has('paused')) throw new ConflictError('job state transition is not allowed');
+        const now = clock().toISOString();
+        if (job.type === 'translate_chapters' && job.state === 'running') {
+          abandonStartedAttempts.run(now, job.id);
+        }
+        const updated = {
+          id: job.id,
+          novelId: id,
+          fromState: job.state,
+          state: 'paused',
+          expectedClaimToken: null,
+          nextRunAt: null,
+          claimedAt: null,
+          claimToken: null,
+          currentChapterId: job.current_chapter_id,
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          updatedAt: now,
+          completedAt: null
+        };
+        if (updateJob.run(updated).changes === 0) throw new ConflictError('job state transition is stale');
+        const paused = jobInNovel.get(job.id, id);
+        appendEvent(paused, { type: 'paused', message: 'Job paused.', chapterId: job.current_chapter_id, details: job.current_chapter_id ? { chapterId: job.current_chapter_id } : {} });
+        return toJob(paused);
       });
     },
 

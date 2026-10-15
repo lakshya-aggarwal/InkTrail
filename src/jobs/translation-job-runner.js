@@ -147,11 +147,7 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
     },
 
     pause(input) {
-      const job = jobs.getJob(input);
-      if (job.state === 'paused') return job;
-      const paused = jobs.transitionJob({ ...input, toState: 'paused' });
-      jobs.abandonPausedTranslationAttempts(input);
-      return paused;
+      return jobs.pauseTranslationJob(input);
     },
 
     async resume(input) {

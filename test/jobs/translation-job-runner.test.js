@@ -350,6 +350,60 @@ test('does not translate while paused and resumes a queued checkpoint', async (t
   runner.stop();
 });
 
+test('pauses an in-flight translation without leaving a started attempt and resumes safely', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'In-flight pause' });
+  const chapter = seededChapter(repositories, novel, 1);
+  const job = repositories.jobs.createTranslationJob({ novelId: novel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  const releases = [];
+  const translationService = createSharedTranslationService({
+    database,
+    repositories,
+    provider: {
+      provider: 'fake',
+      model: 'fake',
+      async translate() {
+        return new Promise((resolve) => releases.push(() => resolve({ paragraphs: ['Translated 1'] })));
+      }
+    },
+    qualityChecker: () => []
+  });
+  const runner = createRunner({ repositories, clock, translationService });
+
+  await runner.start();
+  await settle();
+  assert.equal(releases.length, 1);
+
+  runner.pause({ novelId: novel.id, jobId: job.id });
+  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).state, 'paused');
+  assert.deepEqual(
+    repositories.jobs.listJobAttempts({ novelId: novel.id, jobId: job.id }).map(({ state }) => state),
+    ['abandoned_on_recovery']
+  );
+  assert.equal(repositories.chapters.listTranslationRevisions(chapter.id).length, 0);
+
+  releases.shift()();
+  await settle();
+  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).state, 'paused');
+  assert.equal(repositories.chapters.listTranslationRevisions(chapter.id).length, 0);
+  assert.equal(repositories.jobs.listJobAttempts({ novelId: novel.id, jobId: job.id }).some(({ state }) => state === 'started'), false);
+
+  await runner.resume({ novelId: novel.id, jobId: job.id });
+  await settle();
+  assert.equal(releases.length, 1);
+  releases.shift()();
+  await settle();
+
+  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).state, 'completed');
+  assert.deepEqual(
+    repositories.jobs.listJobAttempts({ novelId: novel.id, jobId: job.id }).map(({ state }) => state),
+    ['abandoned_on_recovery', 'succeeded']
+  );
+  assert.equal(repositories.chapters.listTranslationRevisions(chapter.id).length, 1);
+  runner.stop();
+});
+
 test('persists only stable safe failure metadata', async (t) => {
   const { clock, database, repositories } = fixture();
   t.after(() => database.close());
