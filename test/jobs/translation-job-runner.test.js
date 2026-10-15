@@ -5,7 +5,7 @@ import { openDatabase } from '../../src/db/database.js';
 import { migrate } from '../../src/db/migrate.js';
 import { TranslationProviderError } from '../../src/domain/errors.js';
 import { createJobRepository } from '../../src/jobs/job-repository.js';
-import { createTranslationJobRunner } from '../../src/jobs/translation-job-runner.js';
+import { createTranslationJobRunner, TRANSLATION_JOB_LEASE_MS } from '../../src/jobs/translation-job-runner.js';
 import { createNovelRepository } from '../../src/novels/novel-repository.js';
 import { createSourceRepository } from '../../src/sources/source-repository.js';
 
@@ -171,6 +171,33 @@ test('runs independent novels concurrently up to the global limit', async (t) =>
   runner.stop();
 });
 
+test('a second live runner does not reclaim an unexpired claim or duplicate its revision', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Lease' });
+  const chapter = seededChapter(repositories, novel, 1);
+  repositories.jobs.createTranslationJob({ novelId: novel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  let release;
+  const translationService = createTranslationService(repositories, () => new Promise((resolve) => { release = resolve; }));
+  const first = createRunner({ repositories, clock, translationService });
+  const second = createRunner({ repositories, clock, translationService });
+
+  await first.start();
+  await settle();
+  await second.start();
+  await settle();
+
+  assert.equal(translationService.calls.length, 1);
+  assert.equal(repositories.chapters.listTranslationRevisions(chapter.id).length, 0);
+  release();
+  await settle();
+
+  assert.equal(repositories.chapters.listTranslationRevisions(chapter.id).length, 1);
+  assert.equal(repositories.jobs.listJobAttempts({ novelId: novel.id, jobId: repositories.jobs.listJobs(novel.id)[0].id }).length, 1);
+  first.stop();
+  second.stop();
+});
+
 test('retries at exactly fifteen-second intervals and pauses after four failures', async (t) => {
   const { clock, database, repositories } = fixture();
   t.after(() => database.close());
@@ -223,6 +250,32 @@ test('does not translate while paused and resumes a queued checkpoint', async (t
   runner.stop();
 });
 
+test('persists only stable safe failure metadata', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Redaction' });
+  seededChapter(repositories, novel, 1);
+  const job = repositories.jobs.createTranslationJob({ novelId: novel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  const secret = 'prompt fragment /Users/lakshya/private payload';
+  const translationService = createTranslationService(repositories, async () => {
+    const error = new Error(secret);
+    error.name = secret;
+    error.retryable = true;
+    throw error;
+  });
+  const runner = createRunner({ repositories, clock, translationService });
+
+  await runner.start();
+  await settle();
+
+  const attempt = repositories.jobs.listJobAttempts({ novelId: novel.id, jobId: job.id })[0];
+  const stored = repositories.jobs.getJob({ novelId: novel.id, jobId: job.id });
+  assert.deepEqual([attempt.errorCode, attempt.errorMessage], ['translation_provider_unavailable', 'Translation provider is unavailable.']);
+  assert.deepEqual([stored.lastErrorCode, stored.lastErrorMessage], ['translation_provider_unavailable', 'Translation provider is unavailable.']);
+  assert.equal(JSON.stringify({ attempt, stored }).includes(secret), false);
+  runner.stop();
+});
+
 test('recovers stale running claims without duplicating a completed checkpoint', async (t) => {
   const { clock, database, repositories } = fixture();
   t.after(() => database.close());
@@ -232,6 +285,7 @@ test('recovers stale running claims without duplicating a completed checkpoint',
   const claim = repositories.jobs.claimNextRunnable({ claimToken: 'stale-claim', type: 'translate_chapters' });
   repositories.jobs.prepareTranslationAttempt({ novelId: novel.id, jobId: job.id, claimToken: claim.claimToken });
   repositories.chapters.addTranslationRevision({ chapterId: chapter.id, translatedText: 'Already translated', provider: 'fake', model: 'fake' });
+  clock.advance(TRANSLATION_JOB_LEASE_MS);
   const translationService = createTranslationService(repositories);
   const runner = createRunner({ repositories, clock, translationService });
 

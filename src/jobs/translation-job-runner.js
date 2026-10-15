@@ -2,6 +2,7 @@ import { ConflictError } from '../domain/errors.js';
 
 const RETRY_DELAY_MS = 15_000;
 const MAX_ATTEMPTS = 4;
+export const TRANSLATION_JOB_LEASE_MS = 60_000;
 
 function defaultScheduler() {
   return {
@@ -19,9 +20,12 @@ function retryAt(clock) {
 }
 
 function errorDetails(error) {
+  if (error?.retryable === true) {
+    return { code: 'translation_provider_unavailable', message: 'Translation provider is unavailable.' };
+  }
   return {
-    code: typeof error?.name === 'string' && error.name.trim() ? error.name.trim().slice(0, 500) : 'TranslationFailed',
-    message: typeof error?.message === 'string' && error.message.trim() ? error.message.trim().slice(0, 500) : 'Translation failed.'
+    code: 'translation_failed',
+    message: 'Translation failed.'
   };
 }
 
@@ -43,7 +47,13 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
   }
 
   async function process(job) {
+    let leaseTimer = null;
+    const renewLease = () => {
+      if (!started || !jobs.renewTranslationClaim({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken })) return;
+      leaseTimer = scheduler.schedule(TRANSLATION_JOB_LEASE_MS / 2, renewLease);
+    };
     try {
+      leaseTimer = scheduler.schedule(TRANSLATION_JOB_LEASE_MS / 2, renewLease);
       while (started) {
         const prepared = jobs.prepareTranslationAttempt({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken });
         if (prepared.status === 'completed') {
@@ -87,6 +97,7 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
         }
       }
     } finally {
+      if (leaseTimer !== null) scheduler.cancel(leaseTimer);
       active -= 1;
       void wake();
     }
@@ -113,7 +124,9 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
     async start() {
       if (started) return;
       started = true;
-      jobs.recoverStaleTranslationClaims();
+      jobs.recoverStaleTranslationClaims({
+        claimedBefore: new Date(clock().getTime() - TRANSLATION_JOB_LEASE_MS).toISOString()
+      });
       await wake();
     },
 

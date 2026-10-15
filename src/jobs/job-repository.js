@@ -205,7 +205,15 @@ export function createJobRepository(database, clock) {
     update jobs set current_chapter_id = null, updated_at = ?
     where id = ? and novel_id = ? and state = 'running' and claim_token = ?
   `);
-  const runningJobs = database.prepare("select * from jobs where type = 'translate_chapters' and state = 'running'");
+  const staleRunningJobs = database.prepare(`
+    select * from jobs
+    where type = 'translate_chapters' and state = 'running'
+      and (claimed_at is null or claimed_at <= ?)
+  `);
+  const renewClaim = database.prepare(`
+    update jobs set claimed_at = ?, updated_at = ?
+    where id = ? and novel_id = ? and state = 'running' and claim_token = ?
+  `);
   const abandonStartedAttempts = database.prepare(`
     update job_attempts set state = 'abandoned_on_recovery', finished_at = ?
     where job_id = ? and state = 'started'
@@ -490,10 +498,18 @@ export function createJobRepository(database, clock) {
       });
     },
 
-    recoverStaleTranslationClaims() {
+    renewTranslationClaim(input) {
+      const { novelId, jobId, claimToken } = requireObject(input);
+      const id = requireNovel(novelId);
+      return renewClaim.run(clock().toISOString(), clock().toISOString(), requireId(jobId, 'jobId'), id, requireId(claimToken, 'claimToken')).changes === 1;
+    },
+
+    recoverStaleTranslationClaims(input) {
+      const { claimedBefore } = requireObject(input);
+      const cutoff = requireId(claimedBefore, 'claimedBefore');
       return withinTransaction(() => {
         const now = clock().toISOString();
-        return runningJobs.all().flatMap((job) => {
+        return staleRunningJobs.all(cutoff).flatMap((job) => {
           abandonStartedAttempts.run(now, job.id);
           const state = job.next_run_at === null ? 'queued' : 'retrying';
           if (recoverJob.run(state, now, job.id).changes === 0) return [];
