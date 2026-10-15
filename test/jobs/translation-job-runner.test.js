@@ -227,6 +227,65 @@ test('claims the lowest anomalous same-novel chapter before priority while anoth
   runner.stop();
 });
 
+test('claims the next unresolved sparse target chapter before a competing job while another novel progresses', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const firstNovel = repositories.novels.createNovel({ title: 'Sparse targets' });
+  const secondNovel = repositories.novels.createNovel({ title: 'Other novel' });
+  const firstChapter = seededChapter(repositories, firstNovel, 1);
+  seededChapter(repositories, firstNovel, 2);
+  seededChapter(repositories, firstNovel, 3);
+  seededChapter(repositories, secondNovel, 1);
+  repositories.chapters.addTranslationRevision({
+    chapterId: firstChapter.id,
+    translatedText: 'Already translated',
+    provider: 'fake',
+    model: 'fake'
+  });
+  database.exec('drop index one_active_translation_job_per_novel');
+  const sparseJob = repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [1, 3] }, priority: 100 });
+  clock.advance(1);
+  const middleJob = repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [2] }, priority: 0 });
+  repositories.jobs.createTranslationJob({ novelId: secondNovel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  const releases = [];
+  const translationService = createTranslationService(repositories, (input) => new Promise((resolve) => releases.push({ input, resolve })));
+  const runner = createRunner({ repositories, clock, translationService });
+
+  await runner.start();
+  await settle();
+
+  assert.deepEqual(
+    translationService.calls
+      .filter(({ novelId }) => novelId === firstNovel.id)
+      .map(({ chapterNumber }) => chapterNumber),
+    [2]
+  );
+  assert.deepEqual(
+    translationService.calls
+      .filter(({ novelId }) => novelId === secondNovel.id)
+      .map(({ chapterNumber }) => chapterNumber),
+    [1]
+  );
+
+  releases.find(({ input }) => input.novelId === firstNovel.id).resolve();
+  await settle();
+
+  assert.deepEqual(
+    translationService.calls
+      .filter(({ novelId }) => novelId === firstNovel.id)
+      .map(({ chapterNumber }) => chapterNumber),
+    [2, 3]
+  );
+
+  for (const release of releases) release.resolve();
+  await settle();
+  assert.deepEqual(
+    repositories.jobs.listJobs(firstNovel.id).map(({ id, state }) => [id, state]).sort(),
+    [[sparseJob.id, 'completed'], [middleJob.id, 'completed']].sort()
+  );
+  runner.stop();
+});
+
 test('keeps a retrying chapter ahead of anomalous queued work for its novel', async (t) => {
   const { clock, database, repositories } = fixture();
   t.after(() => database.close());

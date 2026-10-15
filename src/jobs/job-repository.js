@@ -167,12 +167,38 @@ export function createJobRepository(database, clock) {
         where earlier_translation.novel_id = jobs.novel_id
           and earlier_translation.type = 'translate_chapters'
           and earlier_translation.state = 'queued'
-          and coalesce(
-            json_extract(earlier_translation.target_json, '$.chapterNumbers[0]'),
-            json_extract(earlier_translation.target_json, '$.startChapterNumber')
-          ) < coalesce(
-            json_extract(jobs.target_json, '$.chapterNumbers[0]'),
-            json_extract(jobs.target_json, '$.startChapterNumber')
+          and (
+            select min(target_chapter.chapter_number)
+            from chapters as target_chapter
+            where target_chapter.novel_id = earlier_translation.novel_id
+              and exists (select 1 from chapter_sources where chapter_sources.chapter_id = target_chapter.id)
+              and not exists (select 1 from translation_revisions where translation_revisions.chapter_id = target_chapter.id)
+              and (
+                exists (
+                  select 1 from json_each(earlier_translation.target_json, '$.chapterNumbers')
+                  where value = target_chapter.chapter_number
+                )
+                or (
+                  json_extract(earlier_translation.target_json, '$.chapterNumbers') is null
+                  and target_chapter.chapter_number between json_extract(earlier_translation.target_json, '$.startChapterNumber') and json_extract(earlier_translation.target_json, '$.endChapterNumber')
+                )
+              )
+          ) < (
+            select min(target_chapter.chapter_number)
+            from chapters as target_chapter
+            where target_chapter.novel_id = jobs.novel_id
+              and exists (select 1 from chapter_sources where chapter_sources.chapter_id = target_chapter.id)
+              and not exists (select 1 from translation_revisions where translation_revisions.chapter_id = target_chapter.id)
+              and (
+                exists (
+                  select 1 from json_each(jobs.target_json, '$.chapterNumbers')
+                  where value = target_chapter.chapter_number
+                )
+                or (
+                  json_extract(jobs.target_json, '$.chapterNumbers') is null
+                  and target_chapter.chapter_number between json_extract(jobs.target_json, '$.startChapterNumber') and json_extract(jobs.target_json, '$.endChapterNumber')
+                )
+              )
           )
       ))
     order by priority desc, created_at, id
