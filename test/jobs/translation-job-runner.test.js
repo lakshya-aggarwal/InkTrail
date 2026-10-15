@@ -8,6 +8,9 @@ import { createJobRepository } from '../../src/jobs/job-repository.js';
 import { createTranslationJobRunner, TRANSLATION_JOB_LEASE_MS } from '../../src/jobs/translation-job-runner.js';
 import { createNovelRepository } from '../../src/novels/novel-repository.js';
 import { createSourceRepository } from '../../src/sources/source-repository.js';
+import { createMemoryRepository } from '../../src/memory/memory-repository.js';
+import { createQualityFindingRepository } from '../../src/translation/quality-finding-repository.js';
+import { createTranslationService as createSharedTranslationService } from '../../src/translation/translation-service.js';
 
 function createClock() {
   let now = new Date('2026-10-15T00:00:00.000Z');
@@ -56,6 +59,8 @@ function fixture() {
     novels: createNovelRepository(database, clock.now),
     chapters: createChapterRepository(database, clock.now),
     sources: createSourceRepository(database, clock.now),
+    memory: createMemoryRepository(database, clock.now),
+    findings: createQualityFindingRepository(database, clock.now),
     jobs: createJobRepository(database, clock.now)
   };
   return { clock, database, repositories };
@@ -334,6 +339,50 @@ test('an expired worker cannot overwrite a reclaimer claim or its job state', as
   assert.equal(after.claimToken === null, false);
   firstRunner.stop();
   secondRunner.stop();
+});
+
+test('only the current claim can append a translation after a stale provider call returns', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Claimed translation' });
+  const chapter = seededChapter(repositories, novel, 1);
+  repositories.jobs.createTranslationJob({ novelId: novel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  const releases = [];
+  const translationService = createSharedTranslationService({
+    database,
+    repositories,
+    provider: {
+      provider: 'fake',
+      model: 'fake',
+      async translate() {
+        return new Promise((resolve) => releases.push(() => resolve({ paragraphs: ['Translated.'] })));
+      }
+    },
+    qualityChecker: () => [{ kind: 'forced_check', details: 'Forced quality check.' }]
+  });
+  const first = createRunner({ repositories, clock, translationService });
+  const second = createRunner({ repositories, clock, translationService });
+
+  await first.start();
+  await settle();
+  clock.advance(TRANSLATION_JOB_LEASE_MS);
+  await second.start();
+  await settle();
+  assert.equal(releases.length, 2);
+
+  releases[0]();
+  await settle();
+  assert.equal(repositories.chapters.listTranslationRevisions(chapter.id).length, 0);
+  assert.equal(database.prepare('select count(*) as count from translation_quality_findings').get().count, 0);
+  assert.deepEqual(repositories.memory.listVerifiedMemoryEntries(novel.id), []);
+  releases[1]();
+  await settle();
+
+  assert.equal(repositories.chapters.listTranslationRevisions(chapter.id).length, 1);
+  assert.equal(database.prepare('select count(*) as count from translation_quality_findings').get().count, 1);
+  assert.equal(repositories.jobs.listJobs(novel.id)[0].state, 'completed');
+  first.stop();
+  second.stop();
 });
 
 test('recovers stale running claims without duplicating a completed checkpoint', async (t) => {

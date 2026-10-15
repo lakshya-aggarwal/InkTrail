@@ -66,7 +66,11 @@ export function createTranslationJobRunner({ jobs, translationService, clock = (
         }
 
         try {
-          await translationService.translateChapter({ novelId: job.novelId, chapterNumber: prepared.chapterNumber });
+          await translationService.translateChapter({
+            novelId: job.novelId,
+            chapterNumber: prepared.chapterNumber,
+            claim: { jobId: job.id, claimToken: job.claimToken }
+          });
           jobs.finishAttempt({ jobId: job.id, attemptId: prepared.attempt.id, claimToken: job.claimToken, state: 'succeeded' });
         } catch (error) {
           const details = errorDetails(error);

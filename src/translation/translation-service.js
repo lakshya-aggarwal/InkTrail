@@ -1,3 +1,4 @@
+import { ConflictError } from '../domain/errors.js';
 import { checkTranslationQuality } from './quality-checker.js';
 
 function withinTransaction(database, action) {
@@ -14,7 +15,7 @@ function withinTransaction(database, action) {
 
 export function createTranslationService({ database, repositories, provider, qualityChecker = checkTranslationQuality }) {
   return {
-    async translateChapter({ novelId, chapterNumber }) {
+    async translateChapter({ novelId, chapterNumber, claim = null }) {
       const chapter = repositories.chapters.getSourcedChapter(novelId, chapterNumber);
       const priorContext = repositories.chapters.listPriorSourcedOriginalTexts(novelId, chapterNumber);
       const verifiedMemory = repositories.memory.listVerifiedMemoryEntries(novelId);
@@ -26,6 +27,15 @@ export function createTranslationService({ database, repositories, provider, qua
       const findings = qualityChecker({ originalChinese: chapter.originalText, paragraphs: translation.paragraphs });
 
       return withinTransaction(database, () => {
+        if (claim !== null) {
+          if (!repositories.jobs) throw new ConflictError('translation job claim is no longer active');
+          repositories.jobs.assertActiveTranslationClaim({
+            novelId,
+            jobId: claim.jobId,
+            claimToken: claim.claimToken,
+            chapterId: chapter.id
+          });
+        }
         const revision = repositories.chapters.addTranslationRevision({
           chapterId: chapter.id,
           translatedText: translation.paragraphs.join('\n\n'),

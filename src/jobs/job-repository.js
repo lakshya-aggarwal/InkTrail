@@ -233,6 +233,11 @@ export function createJobRepository(database, clock) {
     where id = ? and state = 'retrying' and next_run_at <= ?
   `);
   const nextRetry = database.prepare("select min(next_run_at) as next_run_at from jobs where type = 'translate_chapters' and state = 'retrying'");
+  const activeTranslationClaim = database.prepare(`
+    select 1 from jobs
+    where id = ? and novel_id = ? and type = 'translate_chapters'
+      and state = 'running' and claim_token = ? and current_chapter_id = ?
+  `);
 
   function withinTransaction(action) {
     database.exec('begin immediate');
@@ -505,6 +510,14 @@ export function createJobRepository(database, clock) {
       const { novelId, jobId, claimToken } = requireObject(input);
       const id = requireNovel(novelId);
       return renewClaim.run(clock().toISOString(), clock().toISOString(), requireId(jobId, 'jobId'), id, requireId(claimToken, 'claimToken')).changes === 1;
+    },
+
+    assertActiveTranslationClaim(input) {
+      const { novelId, jobId, claimToken, chapterId } = requireObject(input);
+      const id = requireNovel(novelId);
+      if (!activeTranslationClaim.get(requireId(jobId, 'jobId'), id, requireId(claimToken, 'claimToken'), requireId(chapterId, 'chapterId'))) {
+        throw new ConflictError('translation job claim is no longer active');
+      }
     },
 
     recoverStaleTranslationClaims(input) {
