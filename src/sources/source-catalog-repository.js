@@ -108,43 +108,47 @@ export function createSourceCatalogRepository(database, clock) {
     return { catalog: toCatalog(catalog), entries: entriesForCatalog.all(catalog.id).map(toEntry) };
   }
 
+  function createOrGetSnapshotInTransaction(input) {
+    const { novelId, novelSourceId, site, canonicalBookUrl, contentSha256, entries } = requireObject(input);
+    const normalizedNovelId = requireText(novelId, 'novelId');
+    const normalizedSourceId = requireText(novelSourceId, 'novelSourceId');
+    const normalizedSite = requireText(site, 'site');
+    const normalizedBookUrl = requireText(canonicalBookUrl, 'canonicalBookUrl');
+    const normalizedHash = requireSha256(contentSha256);
+    const normalizedEntries = normalizeEntries(entries);
+    if (!novelExists.get(normalizedNovelId)) throw new NotFoundError('novel not found');
+
+    const source = novelSource.get(normalizedSourceId);
+    if (!source || source.novel_id !== normalizedNovelId || source.site !== normalizedSite || source.normalized_url !== normalizedBookUrl) {
+      throw new ConflictError('source catalog must use the novel canonical book source');
+    }
+    const existing = catalogByIdentity.get(normalizedSourceId, normalizedHash);
+    if (existing) return getSnapshot(normalizedNovelId, existing.id);
+
+    const now = clock().toISOString();
+    const catalog = {
+      id: randomUUID(),
+      novelId: normalizedNovelId,
+      novelSourceId: normalizedSourceId,
+      site: normalizedSite,
+      canonicalBookUrl: normalizedBookUrl,
+      contentSha256: normalizedHash,
+      entryCount: normalizedEntries.length,
+      createdAt: now
+    };
+    insertCatalog.run(catalog);
+    for (const entry of normalizedEntries) {
+      insertEntry.run({ id: randomUUID(), catalogId: catalog.id, novelId: catalog.novelId, ...entry, createdAt: now });
+    }
+    return getSnapshot(normalizedNovelId, catalog.id);
+  }
+
   return {
     createOrGetSnapshot(input) {
-      const { novelId, novelSourceId, site, canonicalBookUrl, contentSha256, entries } = requireObject(input);
-      const normalizedNovelId = requireText(novelId, 'novelId');
-      const normalizedSourceId = requireText(novelSourceId, 'novelSourceId');
-      const normalizedSite = requireText(site, 'site');
-      const normalizedBookUrl = requireText(canonicalBookUrl, 'canonicalBookUrl');
-      const normalizedHash = requireSha256(contentSha256);
-      const normalizedEntries = normalizeEntries(entries);
-      if (!novelExists.get(normalizedNovelId)) throw new NotFoundError('novel not found');
-
-      return withinTransaction(() => {
-        const source = novelSource.get(normalizedSourceId);
-        if (!source || source.novel_id !== normalizedNovelId || source.site !== normalizedSite || source.normalized_url !== normalizedBookUrl) {
-          throw new ConflictError('source catalog must use the novel canonical book source');
-        }
-        const existing = catalogByIdentity.get(normalizedSourceId, normalizedHash);
-        if (existing) return getSnapshot(normalizedNovelId, existing.id);
-
-        const now = clock().toISOString();
-        const catalog = {
-          id: randomUUID(),
-          novelId: normalizedNovelId,
-          novelSourceId: normalizedSourceId,
-          site: normalizedSite,
-          canonicalBookUrl: normalizedBookUrl,
-          contentSha256: normalizedHash,
-          entryCount: normalizedEntries.length,
-          createdAt: now
-        };
-        insertCatalog.run(catalog);
-        for (const entry of normalizedEntries) {
-          insertEntry.run({ id: randomUUID(), catalogId: catalog.id, novelId: catalog.novelId, ...entry, createdAt: now });
-        }
-        return getSnapshot(normalizedNovelId, catalog.id);
-      });
+      return withinTransaction(() => createOrGetSnapshotInTransaction(input));
     },
+
+    createOrGetSnapshotInTransaction,
 
     getSnapshot,
 

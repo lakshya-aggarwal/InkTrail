@@ -59,6 +59,7 @@ export function createSourceRepository(database, clock) {
   const novelExists = database.prepare('select 1 from novels where id = ?');
   const novelSourceById = database.prepare('select * from novel_sources where id = ?');
   const novelSourceByIdentity = database.prepare('select * from novel_sources where novel_id = ? and site = ? and external_novel_id = ?');
+  const novelSourcesByNovelAndSite = database.prepare('select * from novel_sources where novel_id = ? and site = ? order by created_at, id');
   const novelSourceByCanonicalUrl = database.prepare('select * from novel_sources where site = ? and normalized_url = ?');
   const insertNovelSource = database.prepare(`
     insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, title, selected_at, created_at)
@@ -113,6 +114,13 @@ export function createSourceRepository(database, clock) {
       const created = { id: randomUUID(), ...novelSource, selectedAt: now, createdAt: now };
       insertNovelSource.run(created);
       return created;
+    },
+
+    listNovelSourcesForSite(input) {
+      const { novelId, site } = requireObject(input);
+      const normalizedNovelId = requireText(novelId, 'novelId');
+      if (!novelExists.get(normalizedNovelId)) throw new NotFoundError('novel not found');
+      return novelSourcesByNovelAndSite.all(normalizedNovelId, requireText(site, 'site')).map(toNovelSource);
     },
 
     createChapterSource(input) {

@@ -1,8 +1,9 @@
-import { SourceFetchError } from '../domain/errors.js';
+import { SourceFetchError, ValidationError } from '../domain/errors.js';
 
 const SITE = 'kujiang';
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
+export const DEFAULT_MAX_CATALOG_ENTRIES = 5_000;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 3;
 
@@ -129,6 +130,10 @@ function chapterIds(normalizedUrl) {
   return { externalNovelId: path[1], externalChapterId: path[2] };
 }
 
+function bookId(normalizedBookUrl) {
+  return new URL(normalizedBookUrl).pathname.match(/^\/book\/([1-9]\d*)$/)[1];
+}
+
 function chapterContentElement(html) {
   return matchingElement(html, (tag, attributes) => (
     (tag === 'article' || tag === 'div') && (
@@ -224,6 +229,116 @@ export function canonicalizeKujiangUrl(value) {
   }
 }
 
+export function canonicalizeKujiangBookUrl(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value || !/^https:\/\/www\.kujiang\.com\/book\/[1-9]\d*$/.test(value)) {
+    return null;
+  }
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.hostname !== 'www.kujiang.com' || url.port || url.search || url.hash) {
+      return null;
+    }
+    return `https://www.kujiang.com${url.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+function canonicalizeKujiangCatalogUrl(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value) return null;
+  try {
+    const url = new URL(value);
+    const path = url.pathname.match(/^\/book\/([1-9]\d*)\/catalog$/);
+    if (url.protocol !== 'https:' || url.hostname !== 'www.kujiang.com' || url.port || url.search || url.hash || !path) {
+      return null;
+    }
+    return `https://www.kujiang.com/book/${path[1]}/catalog`;
+  } catch {
+    return null;
+  }
+}
+
+function isStrictlyIncreasingId(previousId, nextId) {
+  return previousId.length < nextId.length || (previousId.length === nextId.length && previousId < nextId);
+}
+
+function catalogContainerElement(html) {
+  return matchingElement(html, (tag, attributes) => (
+    ['div', 'section', 'ul', 'ol'].includes(tag) && (
+      'data-book-catalog' in attributes ||
+      ['book-catalog', 'chapter-list', 'chapterlist'].includes(attributes.id) ||
+      classes(attributes).has('book-catalog') ||
+      classes(attributes).has('catalog-list') ||
+      classes(attributes).has('kjsection-catalog')
+    )
+  ));
+}
+
+function catalogHasUnsupportedPagination(content, baseUrl) {
+  const anchors = /<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi;
+  for (const anchor of content.matchAll(anchors)) {
+    const attributes = attributesFrom(anchor[1]);
+    const classNames = classes(attributes);
+    if ('data-catalog-pagination' in attributes || attributes.rel?.toLowerCase() === 'next' || classNames.has('pagination') || classNames.has('pager') || classNames.has('page-next')) {
+      return true;
+    }
+    try {
+      const url = new URL(attributes.href, baseUrl);
+      if (url.pathname === new URL(baseUrl).pathname && url.searchParams.has('page')) return true;
+    } catch {
+      // Ignore malformed non-chapter links. They cannot be catalog entries.
+    }
+  }
+  return false;
+}
+
+export function parseKujiangCatalogHtml(html, canonicalBookUrl, maxCatalogEntries = DEFAULT_MAX_CATALOG_ENTRIES) {
+  const normalizedBookUrl = canonicalizeKujiangBookUrl(canonicalBookUrl);
+  if (!normalizedBookUrl) throw new ValidationError('unsupported Kujiang book URL');
+  if (typeof html !== 'string') throw new ValidationError('source HTML must be text');
+  if (!Number.isSafeInteger(maxCatalogEntries) || maxCatalogEntries < 1) throw new ValidationError('maxCatalogEntries must be a positive integer');
+
+  const visibleHtml = renderedHtml(html);
+  const catalog = catalogContainerElement(visibleHtml);
+  if (!catalog) throw new ValidationError('source HTML is missing a book catalog');
+  const catalogUrl = `${normalizedBookUrl}/catalog`;
+  if (catalogHasUnsupportedPagination(catalog.content, catalogUrl)) {
+    throw new ValidationError('source HTML uses unsupported catalog pagination');
+  }
+
+  const entries = [];
+  const sourceUrls = new Set();
+  const externalNovelId = bookId(normalizedBookUrl);
+  const anchors = /<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi;
+  for (const anchor of catalog.content.matchAll(anchors)) {
+    const attributes = attributesFrom(anchor[1]);
+    const sourceUrl = canonicalNavigationUrl(attributes.href, catalogUrl);
+    if (!sourceUrl) continue;
+    const ids = chapterIds(sourceUrl);
+    if (ids.externalNovelId !== externalNovelId) {
+      throw new ValidationError('source HTML catalog contains a chapter from another book');
+    }
+    const sourceTitle = textFromHtml(anchor[2]);
+    if (!sourceTitle) throw new ValidationError('source HTML catalog has an untitled chapter');
+    if (sourceUrls.has(sourceUrl)) throw new ValidationError('source HTML catalog has duplicate chapter URLs');
+    const previous = entries.at(-1);
+    if (previous && !isStrictlyIncreasingId(previous.externalChapterId, ids.externalChapterId)) {
+      throw new ValidationError('source HTML catalog chapter order is not strictly increasing');
+    }
+    if (entries.length === maxCatalogEntries) throw new ValidationError('source HTML catalog exceeds the entry limit');
+    sourceUrls.add(sourceUrl);
+    entries.push({
+      ordinal: entries.length + 1,
+      externalChapterId: ids.externalChapterId,
+      sourceUrl,
+      normalizedUrl: sourceUrl,
+      sourceTitle
+    });
+  }
+  if (entries.length === 0) throw new ValidationError('source HTML catalog has no canonical chapter links');
+  return { site: SITE, externalNovelId, canonicalBookUrl: normalizedBookUrl, entries };
+}
+
 export function parseKujiangChapterHtml(html, sourceUrl) {
   const normalizedUrl = canonicalizeKujiangUrl(sourceUrl);
   if (!normalizedUrl) {
@@ -305,7 +420,7 @@ async function readHtmlBody(response, maxBodyBytes, signal) {
   return new TextDecoder().decode(body);
 }
 
-async function fetchHtml(fetchClient, normalizedUrl, timeoutMs, maxBodyBytes) {
+async function fetchHtml(fetchClient, normalizedUrl, timeoutMs, maxBodyBytes, canonicalizeRedirect) {
   let currentUrl = normalizedUrl;
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
     const controller = new AbortController();
@@ -322,7 +437,12 @@ async function fetchHtml(fetchClient, normalizedUrl, timeoutMs, maxBodyBytes) {
         throw new SourceFetchError('Kujiang source request failed', { cause: error });
       }
       if (REDIRECT_STATUSES.has(response?.status)) {
-        const redirectedUrl = canonicalNavigationUrl(response.headers?.get?.('location'), currentUrl);
+        let redirectedUrl = null;
+        try {
+          redirectedUrl = canonicalizeRedirect(new URL(response.headers?.get?.('location'), currentUrl).href);
+        } catch {
+          redirectedUrl = null;
+        }
         if (!redirectedUrl || redirects === MAX_REDIRECTS) {
           throw new SourceFetchError('Kujiang source redirect was rejected');
         }
@@ -347,7 +467,10 @@ async function fetchHtml(fetchClient, normalizedUrl, timeoutMs, maxBodyBytes) {
   throw new SourceFetchError('Kujiang source redirect limit was reached');
 }
 
-export function createKujiangAdapter({ fetch, timeoutMs = DEFAULT_TIMEOUT_MS, maxBodyBytes = DEFAULT_MAX_BODY_BYTES }) {
+export function createKujiangAdapter({ fetch, timeoutMs = DEFAULT_TIMEOUT_MS, maxBodyBytes = DEFAULT_MAX_BODY_BYTES, maxCatalogEntries = DEFAULT_MAX_CATALOG_ENTRIES }) {
+  if (!Number.isSafeInteger(maxCatalogEntries) || maxCatalogEntries < 1) {
+    throw new ValidationError('maxCatalogEntries must be a positive integer');
+  }
   return {
     site: SITE,
     supports(sourceUrl) {
@@ -359,12 +482,23 @@ export function createKujiangAdapter({ fetch, timeoutMs = DEFAULT_TIMEOUT_MS, ma
         throw new Error('unsupported Kujiang chapter URL');
       }
       try {
-        return parseKujiangChapterHtml(await fetchHtml(fetch, normalizedUrl, timeoutMs, maxBodyBytes), normalizedUrl);
+        return parseKujiangChapterHtml(await fetchHtml(fetch, normalizedUrl, timeoutMs, maxBodyBytes, canonicalizeKujiangUrl), normalizedUrl);
       } catch (error) {
         if (error instanceof SourceFetchError) {
           throw error;
         }
         throw new SourceFetchError('Kujiang source content could not be parsed', { cause: error });
+      }
+    },
+    async fetchCatalog(bookUrl) {
+      const normalizedBookUrl = canonicalizeKujiangBookUrl(bookUrl);
+      if (!normalizedBookUrl) throw new ValidationError('unsupported Kujiang book URL');
+      try {
+        const html = await fetchHtml(fetch, `${normalizedBookUrl}/catalog`, timeoutMs, maxBodyBytes, canonicalizeKujiangCatalogUrl);
+        return parseKujiangCatalogHtml(html, normalizedBookUrl, maxCatalogEntries);
+      } catch (error) {
+        if (error instanceof SourceFetchError || error instanceof ValidationError) throw error;
+        throw new SourceFetchError('Kujiang source catalog could not be parsed', { cause: error });
       }
     }
   };

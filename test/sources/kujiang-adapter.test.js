@@ -3,13 +3,16 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createAdapterRegistry } from '../../src/sources/adapter-registry.js';
 import {
+  canonicalizeKujiangBookUrl,
   canonicalizeKujiangUrl,
   createKujiangAdapter,
+  parseKujiangCatalogHtml,
   parseKujiangChapterHtml
 } from '../../src/sources/kujiang-adapter.js';
-import { SourceFetchError } from '../../src/domain/errors.js';
+import { SourceFetchError, ValidationError } from '../../src/domain/errors.js';
 
 const chapterUrl = 'https://www.kujiang.com/book/9/906595';
+const bookUrl = 'https://www.kujiang.com/book/9';
 const fixturePath = new URL('../fixtures/kujiang/chapter.html', import.meta.url);
 
 async function chapterHtml() {
@@ -33,6 +36,46 @@ test('canonicalizes only exact Kujiang chapter URLs', () => {
   ]) {
     assert.equal(canonicalizeKujiangUrl(url), null);
   }
+});
+
+test('canonicalizes only exact Kujiang book URLs without query or fragment variants', () => {
+  assert.equal(canonicalizeKujiangBookUrl(bookUrl), bookUrl);
+  for (const url of [
+    `${bookUrl}/catalog`,
+    `${bookUrl}?tracking=1`,
+    `${bookUrl}#catalog`,
+    'http://www.kujiang.com/book/9',
+    'https://www.kujiang.com:443/book/9',
+    'https://www.kujiang.com/book/9/',
+    'https://www.kujiang.com/book/a',
+    'https://example.com/book/9'
+  ]) {
+    assert.equal(canonicalizeKujiangBookUrl(url), null);
+  }
+});
+
+test('parses only named catalog containers into ordered canonical chapters', async () => {
+  const html = await readFile(new URL('../fixtures/kujiang/catalog.html', import.meta.url), 'utf8');
+
+  assert.deepEqual(parseKujiangCatalogHtml(html, bookUrl).entries, [
+    { ordinal: 1, externalChapterId: '100', sourceUrl: 'https://www.kujiang.com/book/9/100', normalizedUrl: 'https://www.kujiang.com/book/9/100', sourceTitle: '第一章 起程' },
+    { ordinal: 2, externalChapterId: '101', sourceUrl: 'https://www.kujiang.com/book/9/101', normalizedUrl: 'https://www.kujiang.com/book/9/101', sourceTitle: '第二章 灯火' },
+    { ordinal: 3, externalChapterId: '102', sourceUrl: 'https://www.kujiang.com/book/9/102', normalizedUrl: 'https://www.kujiang.com/book/9/102', sourceTitle: '第三章归途' }
+  ]);
+});
+
+test('rejects missing, duplicate, paginated, unordered, and over-limit catalogs', async () => {
+  const missing = await readFile(new URL('../fixtures/kujiang/catalog-missing.html', import.meta.url), 'utf8');
+  const malformed = await readFile(new URL('../fixtures/kujiang/catalog-malformed.html', import.meta.url), 'utf8');
+  const duplicate = await readFile(new URL('../fixtures/kujiang/catalog-duplicate.html', import.meta.url), 'utf8');
+  const overflow = await readFile(new URL('../fixtures/kujiang/catalog-overflow.html', import.meta.url), 'utf8');
+  const paginated = '<section data-book-catalog><a href="/book/9/100">第一章</a><a data-catalog-pagination href="?page=2">下一页</a></section>';
+  const unordered = '<section data-book-catalog><a href="/book/9/101">第二章</a><a href="/book/9/100">第一章</a></section>';
+
+  for (const html of [missing, malformed, duplicate, paginated, unordered]) {
+    assert.throws(() => parseKujiangCatalogHtml(html, bookUrl), ValidationError);
+  }
+  assert.throws(() => parseKujiangCatalogHtml(overflow, bookUrl, 2), /entry limit/);
 });
 
 test('ignores nested-template decoys and preserves rendered narrative Chinese from a static fixture', async () => {
@@ -135,6 +178,32 @@ test('revalidates redirects before requesting their target', async () => {
 
   await assert.rejects(() => adapter.fetchChapter(chapterUrl), SourceFetchError);
   assert.deepEqual(calls, [chapterUrl]);
+});
+
+test('fetches exactly one catalog document, preserves fetch guards, and revalidates catalog redirects', async () => {
+  const calls = [];
+  const catalog = await readFile(new URL('../fixtures/kujiang/catalog.html', import.meta.url), 'utf8');
+  const adapter = createKujiangAdapter({
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      if (calls.length === 1) return htmlResponse('', { status: 302, headers: { location: `${bookUrl}/catalog` } });
+      return htmlResponse(catalog);
+    }
+  });
+
+  const result = await adapter.fetchCatalog(bookUrl);
+  assert.equal(result.entries.length, 3);
+  assert.deepEqual(calls.map(({ url }) => url), [`${bookUrl}/catalog`, `${bookUrl}/catalog`]);
+  assert.equal(calls[0].options.redirect, 'manual');
+
+  const unsafe = createKujiangAdapter({
+    fetch: async () => htmlResponse('', { status: 302, headers: { location: 'https://example.com/book/9/catalog' } })
+  });
+  await assert.rejects(() => unsafe.fetchCatalog(bookUrl), SourceFetchError);
+  await assert.rejects(
+    () => createKujiangAdapter({ fetch: async () => new Response('not html', { headers: { 'content-type': 'text/plain' } }) }).fetchCatalog(bookUrl),
+    SourceFetchError
+  );
 });
 
 test('maps timeout, non-OK, oversized, and malformed source responses to retryable errors', async () => {
