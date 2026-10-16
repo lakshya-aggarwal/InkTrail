@@ -1,6 +1,8 @@
 import { ConflictError, ValidationError } from '../domain/errors.js';
 import { canonicalizeChapterTarget } from './job-repository.js';
 
+const EXPORT_LOCK_RETRY_DELAYS_MS = [10, 25, 50];
+
 function requireObject(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new ValidationError('input must be an object');
   return value;
@@ -12,6 +14,14 @@ function sameSelection(left, right) {
 
 function active(job) {
   return ['queued', 'running', 'retrying'].includes(job.state);
+}
+
+function isDatabaseLocked(error) {
+  return error?.code === 'ERR_SQLITE_ERROR' && /database is locked/i.test(error.message);
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 export function createJobService({ database, jobs, exports, runner }) {
@@ -31,6 +41,30 @@ export function createJobService({ database, jobs, exports, runner }) {
       return { export: snapshot.export, job: jobResource(job) };
     }
     return null;
+  }
+
+  function createEpubExportInTransaction({ novelId, selection }, idempotencyKey) {
+    let transactionOpen = false;
+    try {
+      database.exec('begin immediate');
+      transactionOpen = true;
+      const existing = existingEpubJob(novelId, selection, idempotencyKey);
+      let result;
+      if (existing) {
+        result = { ...existing, created: false };
+      } else {
+        const snapshot = exports.captureSnapshotInTransaction({ novelId, selection });
+        const job = jobs.createBuildEpubJobInTransaction({ novelId, target: { exportId: snapshot.export.id }, idempotencyKey });
+        const exportRecord = exports.attachBuildJobInTransaction({ novelId, exportId: snapshot.export.id, jobId: job.id });
+        result = { export: exportRecord, job: jobResource(job), created: true };
+      }
+      database.exec('commit');
+      transactionOpen = false;
+      return result;
+    } catch (error) {
+      if (transactionOpen) database.exec('rollback');
+      throw error;
+    }
   }
 
   return {
@@ -57,22 +91,16 @@ export function createJobService({ database, jobs, exports, runner }) {
     async createEpubExport({ novelId, selection }, idempotencyKey = null) {
       requireObject({ novelId, selection });
       canonicalizeChapterTarget(selection);
-      database.exec('begin immediate');
-      let result;
-      try {
-        const existing = existingEpubJob(novelId, selection, idempotencyKey);
-        if (existing) {
-          result = { ...existing, created: false };
-        } else {
-          const snapshot = exports.captureSnapshotInTransaction({ novelId, selection });
-          const job = jobs.createBuildEpubJobInTransaction({ novelId, target: { exportId: snapshot.export.id }, idempotencyKey });
-          const exportRecord = exports.attachBuildJobInTransaction({ novelId, exportId: snapshot.export.id, jobId: job.id });
-          result = { export: exportRecord, job: jobResource(job), created: true };
+      let result = null;
+      for (const retryDelay of [...EXPORT_LOCK_RETRY_DELAYS_MS, null]) {
+        try {
+          result = createEpubExportInTransaction({ novelId, selection }, idempotencyKey);
+          break;
+        } catch (error) {
+          if (!isDatabaseLocked(error)) throw error;
+          if (retryDelay === null) throw new ConflictError('EPUB export creation is busy; retry the request');
+          await delay(retryDelay);
         }
-        database.exec('commit');
-      } catch (error) {
-        database.exec('rollback');
-        throw error;
       }
       if (result.created) await runner.wake();
       return result;

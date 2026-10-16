@@ -439,7 +439,35 @@ test('stop drains a claimed translation before relinquishing the runner', async 
   releaseTranslation();
   await stopping;
 
-  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).state, 'completed');
+  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).state, 'running');
+  assert.equal(repositories.chapters.getReaderChapter(novel.id, 1).revision, 1);
+});
+
+test('stop drains the active chapter without starting the next chapter', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Bounded graceful shutdown' });
+  seededChapter(repositories, novel, 1);
+  seededChapter(repositories, novel, 2);
+  repositories.jobs.createTranslationJob({ novelId: novel.id, target: { startChapterNumber: 1, endChapterNumber: 2 } });
+  let releaseTranslation;
+  const translationService = createTranslationService(repositories, (_input, callCount) => {
+    if (callCount === 1) return new Promise((resolve) => { releaseTranslation = resolve; });
+  });
+  const runner = createRunner({ repositories, clock, translationService });
+
+  await runner.start();
+  await settle();
+  assert.equal(translationService.calls.length, 1);
+
+  const stopping = runner.stop();
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseTranslation();
+  await stopping;
+
+  assert.equal(translationService.calls.length, 1);
+  assert.equal(repositories.chapters.getReaderChapter(novel.id, 1).revision, 1);
+  assert.equal(repositories.chapters.getReaderChapter(novel.id, 2).translatedText, null);
 });
 
 test('a stale EPUB worker cannot start an attempt under a replacement claim', async (t) => {

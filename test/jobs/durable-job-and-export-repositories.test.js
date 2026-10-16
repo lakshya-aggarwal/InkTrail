@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import test from 'node:test';
+import { tmpdir } from 'node:os';
 import { createChapterRepository } from '../../src/chapters/chapter-repository.js';
 import { openDatabase } from '../../src/db/database.js';
 import { migrate } from '../../src/db/migrate.js';
@@ -10,8 +13,8 @@ import { createJobService } from '../../src/jobs/job-service.js';
 import { createNovelRepository } from '../../src/novels/novel-repository.js';
 import { createSourceRepository } from '../../src/sources/source-repository.js';
 
-function fixture() {
-  const database = openDatabase({ databasePath: ':memory:' });
+function fixture(databasePath = ':memory:') {
+  const database = openDatabase({ databasePath });
   migrate(database);
   const clock = () => new Date('2026-10-14T00:00:00.000Z');
   return {
@@ -203,4 +206,33 @@ test('EPUB snapshot and build job commit together and deduplicate inside the tra
   assert.equal(first.export.jobId, first.job.id);
   assert.equal(repositories.database.prepare('select count(*) as count from epub_exports').get().count, 1);
   assert.equal(repositories.database.prepare("select count(*) as count from jobs where type = 'build_epub'").get().count, 1);
+});
+
+test('a second SQLite connection retries a locked EPUB create and returns the committed export', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'inktrail-export-lock-'));
+  const databasePath = join(directory, 'inktrail.sqlite');
+  const first = fixture(databasePath);
+  const second = fixture(databasePath);
+  t.after(async () => {
+    first.database.close();
+    second.database.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const { firstNovel } = seed(first);
+  const runner = { async wake() {} };
+  const secondService = createJobService({ database: second.database, jobs: second.jobs, exports: second.exports, runner });
+
+  first.database.exec('begin immediate');
+  const snapshot = first.exports.captureSnapshotInTransaction({ novelId: firstNovel.id, selection: { chapterNumbers: [1] } });
+  const job = first.jobs.createBuildEpubJobInTransaction({ novelId: firstNovel.id, target: { exportId: snapshot.export.id } });
+  first.exports.attachBuildJobInTransaction({ novelId: firstNovel.id, exportId: snapshot.export.id, jobId: job.id });
+  setTimeout(() => first.database.exec('commit'), 1);
+
+  const duplicate = await secondService.createEpubExport({ novelId: firstNovel.id, selection: { chapterNumbers: [1] } });
+
+  assert.equal(duplicate.created, false);
+  assert.equal(duplicate.export.id, snapshot.export.id);
+  assert.equal(duplicate.job.id, job.id);
+  assert.equal(second.database.prepare('select count(*) as count from epub_exports').get().count, 1);
+  assert.equal(second.database.prepare("select count(*) as count from jobs where type = 'build_epub'").get().count, 1);
 });

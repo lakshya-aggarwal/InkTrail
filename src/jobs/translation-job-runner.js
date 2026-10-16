@@ -120,7 +120,7 @@ export function createTranslationJobRunner({ jobs, translationService, epubBuild
         }
         return;
       }
-      while (started) {
+      while (started && !stopping) {
         const prepared = jobs.prepareTranslationAttempt({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken });
         if (prepared.status === 'completed') {
           jobs.transitionJob({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken, toState: 'completed' });
