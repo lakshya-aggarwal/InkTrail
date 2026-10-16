@@ -187,6 +187,59 @@ test('workspace queues the current sourced chapter and retains durable status af
   await expect(page.locator('#workspace-job-status')).toHaveText('Translation is completed after 1 attempt.');
 });
 
+test('workspace is hidden for local chapters and stops its active polling after navigation', async ({ page }, testInfo) => {
+  const novel = await page.request.post('/api/v1/novels', { data: { title: 'Mixed provenance novel' } });
+  const novelBody = await novel.json();
+  const imported = await page.request.post(`/api/v1/novels/${novelBody.id}/source-chapters`, {
+    data: { sourceUrl: fixtureControlChapterUrl(testInfo, 15, 8), chapterNumber: 1 }
+  });
+  expect(imported.ok(), await imported.text()).toBeTruthy();
+  const local = await page.request.post(`/api/v1/novels/${novelBody.id}/chapters`, {
+    data: { chapterNumber: 2, title: 'Local chapter', originalText: 'Local chapter text' }
+  });
+  expect(local.ok(), await local.text()).toBeTruthy();
+
+  await page.goto(`/?novel=${novelBody.id}&chapter=1`);
+  await expect(page.locator('#translation-workspace')).toBeVisible();
+  await page.getByRole('button', { name: 'Queue translation' }).click();
+  await expect(page.getByRole('button', { name: 'Pause translation' })).toBeVisible();
+
+  const workspaceRequests = [];
+  page.on('request', (request) => {
+    if (request.method() === 'GET' && /\/api\/v1\/(jobs\?novelId=|novels\/[^/]+\/exports$)/.test(new URL(request.url()).pathname + new URL(request.url()).search)) {
+      workspaceRequests.push(request.url());
+    }
+  });
+  await page.getByRole('button', { name: 'Next chapter' }).last().click();
+
+  await expect(page.getByRole('heading', { name: 'Local chapter' })).toBeVisible();
+  await expect(page.locator('#translation-workspace')).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Queue translation' })).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Create EPUB' })).toBeHidden();
+  await page.waitForTimeout(1_200);
+  expect(workspaceRequests).toEqual([]);
+});
+
+test('workspace submits a huge chapter range without expanding it in the browser', async ({ page }, testInfo) => {
+  const novelId = await seedSourcedChapters(page.request, { sourceUrls: [fixtureChapterUrl(testInfo, 16)] });
+  await page.goto(`/?novel=${novelId}&chapter=1`);
+  await page.getByLabel('From').fill('1');
+  await page.getByLabel('To').fill('100000000');
+
+  const queued = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/jobs');
+  await page.getByRole('button', { name: 'Queue translation' }).click();
+  const request = await queued;
+  const body = request.postDataJSON();
+
+  expect(body).toEqual({
+    novelId,
+    type: 'translate_chapters',
+    target: { startChapterNumber: 1, endChapterNumber: 100000000 }
+  });
+  expect(request.postData()?.length).toBeLessThan(200);
+  await expect(page.locator('#workspace-status')).toHaveText('translation target must contain only imported source chapters');
+});
+
 test('workspace pauses and resumes a durable translation', async ({ page }, testInfo) => {
   const novelId = await seedSourcedChapters(page.request, {
     title: 'Paused workspace novel',

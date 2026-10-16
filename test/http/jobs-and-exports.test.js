@@ -84,6 +84,26 @@ test('durable job HTTP resources preserve idempotency, state controls, and novel
   });
 });
 
+test('translation jobs reject targets without persisted source provenance', async () => {
+  const novel = await requestJson('POST', '/api/v1/novels', { title: 'Local Trail' });
+  const chapter = await requestJson('POST', `/api/v1/novels/${novel.body.id}/chapters`, {
+    chapterNumber: 1,
+    title: 'Local chapter',
+    originalText: 'Local text'
+  });
+  const job = await requestJson('POST', '/api/v1/jobs', {
+    novelId: novel.body.id,
+    type: 'translate_chapters',
+    target: { startChapterNumber: 1, endChapterNumber: 1 }
+  });
+
+  assert.equal(chapter.status, 201);
+  assert.deepEqual(job, {
+    status: 409,
+    body: { error: { code: 'conflict', message: 'translation target must contain only imported source chapters', retryable: false } }
+  });
+});
+
 test('paused queued jobs resume through durable controls', async () => {
   await app.close();
   let releaseFirstTranslation;

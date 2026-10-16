@@ -47,6 +47,7 @@ function toChapter(row) {
     title: row.title,
     originalText: row.original_text,
     sourceUrl: row.source_url,
+    hasSourceProvenance: Boolean(row.has_source_provenance),
     createdAt: row.created_at
   };
 }
@@ -67,11 +68,12 @@ export function createChapterRepository(database, clock) {
   const novelExists = database.prepare('select 1 from novels where id = ?');
   const chapterByNovelAndNumber = database.prepare(`
     select id, novel_id, chapter_number, title, original_text, source_url, created_at
+      , exists (select 1 from chapter_sources where chapter_sources.chapter_id = chapters.id) as has_source_provenance
     from chapters where novel_id = ? and chapter_number = ?
   `);
   const sourcedChapterByNovelAndNumber = database.prepare(`
     select chapters.id, chapters.novel_id, chapters.chapter_number, chapters.title,
-      chapters.original_text, chapters.source_url, chapters.created_at
+      chapters.original_text, chapters.source_url, chapters.created_at, true as has_source_provenance
     from chapters
     where chapters.novel_id = ? and chapters.chapter_number = ?
       and exists (select 1 from chapter_sources where chapter_sources.chapter_id = chapters.id)

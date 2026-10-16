@@ -77,6 +77,7 @@ test('translation jobs canonicalize targets, isolate novels, and enforce lifecyc
   assert.equal(same.id, first.id);
   assert.throws(() => repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [1] }, idempotencyKey: 'first' }), ConflictError);
   assert.throws(() => repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [1] } }), ConflictError);
+  assert.throws(() => repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { startChapterNumber: 1, endChapterNumber: 3 } }), ConflictError);
   assert.throws(() => repositories.jobs.transitionJob({ novelId: firstNovel.id, jobId: first.id, toState: 'completed' }), ConflictError);
   assert.throws(() => repositories.jobs.transitionJob({ novelId: firstNovel.id, jobId: first.id, toState: 'running' }), ConflictError);
   const claimed = repositories.jobs.claimNextRunnable({ claimToken: 'runner-a' });

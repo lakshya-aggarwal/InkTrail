@@ -751,8 +751,11 @@ components:
       allOf:
         - $ref: '#/components/schemas/Chapter'
         - type: object
-          required: [translationRevisionId, translatedText, provider, model, revision, previousChapterNumber, nextChapterNumber]
+          required: [hasSourceProvenance, translationRevisionId, translatedText, provider, model, revision, previousChapterNumber, nextChapterNumber]
           properties:
+            hasSourceProvenance:
+              type: boolean
+              description: Whether this chapter has persisted imported-source provenance.
             translationRevisionId:
               type: string
               format: uuid

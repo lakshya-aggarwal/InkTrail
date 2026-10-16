@@ -83,11 +83,11 @@ function rangeSelection() {
   if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 1 || to < from) {
     throw new Error('Choose a valid chapter range.');
   }
-  return { chapterNumbers: Array.from({ length: to - from + 1 }, (_, index) => from + index) };
+  return { startChapterNumber: from, endChapterNumber: to };
 }
 
 function workspaceStillSelected(novelId, token) {
-  return workspaceToken === token && currentChapter?.novelId === novelId;
+  return workspaceToken === token && currentChapter?.novelId === novelId && currentChapter.hasSourceProvenance;
 }
 
 function renderWorkspaceJob(job) {
@@ -149,6 +149,10 @@ async function refreshWorkspace(novelId, token = workspaceToken) {
 }
 
 function showWorkspace(chapter) {
+  if (!chapter.hasSourceProvenance) {
+    hideWorkspace();
+    return;
+  }
   workspaceToken += 1;
   const token = workspaceToken;
   stopWorkspacePolling();
@@ -332,7 +336,7 @@ feedbackForm.addEventListener('submit', async (event) => {
 });
 workspaceForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!currentChapter) return;
+  if (!currentChapter?.hasSourceProvenance) return;
   try {
     const target = rangeSelection();
     queueTranslation.disabled = true;
@@ -351,7 +355,7 @@ workspaceForm.addEventListener('submit', async (event) => {
   }
 });
 createEpub.addEventListener('click', async () => {
-  if (!currentChapter) return;
+  if (!currentChapter?.hasSourceProvenance) return;
   try {
     const selection = rangeSelection();
     createEpub.disabled = true;

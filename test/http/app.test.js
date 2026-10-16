@@ -64,6 +64,7 @@ test('novel, chapter, and reading-progress routes preserve library state', async
   assert.equal(chapter.status, 201);
   assert.equal(reader.status, 200);
   assert.equal(reader.body.originalText, 'Original Chinese');
+  assert.equal(reader.body.hasSourceProvenance, false);
   assert.deepEqual(progress, {
     status: 200,
     body: { readingProgress: { novelId: novel.body.id, chapterNumber: 1, updatedAt: progress.body.readingProgress.updatedAt } }
@@ -136,6 +137,7 @@ test('source chapter import returns reader data and is idempotent', async () => 
   assert.equal(first.status, 201);
   assert.equal(second.status, 200);
   assert.equal(first.body.chapter.chapterNumber, 7);
+  assert.equal(first.body.chapter.hasSourceProvenance, true);
   assert.equal(first.body.chapter.originalText, '夜色落在城墙上，远处的灯火仍未熄灭。\n\n他抬起头\n\n看见了归来的路。\n\n她说上一章的旧书里夹着一张加入书架的便签。');
   assert.equal(first.body.source.sourceUrl, chapterUrl);
   assert.deepEqual(second.body, first.body);

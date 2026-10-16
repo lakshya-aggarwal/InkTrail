@@ -138,6 +138,19 @@ export function createJobRepository(database, clock) {
   const jobInNovel = database.prepare('select * from jobs where id = ? and novel_id = ?');
   const jobByIdempotencyKey = database.prepare('select * from jobs where novel_id = ? and type = ? and idempotency_key = ?');
   const activeJobByTarget = database.prepare("select * from jobs where novel_id = ? and type = ? and target_hash = ? and state in ('queued', 'running', 'retrying')");
+  const sourcedChapterCountForRange = database.prepare(`
+    select count(*) as count
+    from chapters
+    where novel_id = ? and chapter_number between ? and ?
+      and exists (select 1 from chapter_sources where chapter_sources.chapter_id = chapters.id)
+  `);
+  const sourcedChapterCountForNumbers = database.prepare(`
+    select count(*) as count
+    from chapters
+    where novel_id = ?
+      and exists (select 1 from chapter_sources where chapter_sources.chapter_id = chapters.id)
+      and chapter_number in (select value from json_each(?, '$.chapterNumbers'))
+  `);
   const insertJob = database.prepare(`
     insert into jobs (
       id, novel_id, type, target_json, target_hash, idempotency_key, state, priority,
@@ -336,6 +349,14 @@ export function createJobRepository(database, clock) {
     return transaction(() => {
       if (type === 'build_epub' && !exportInNovel.get(normalizedTarget.exportId, normalizedNovelId)) {
         throw new NotFoundError('EPUB export not found');
+      }
+      if (type === 'translate_chapters') {
+        const expectedCount = normalizedTarget.chapterNumbers?.length
+          ?? normalizedTarget.endChapterNumber - normalizedTarget.startChapterNumber + 1;
+        const sourcedCount = normalizedTarget.chapterNumbers
+          ? sourcedChapterCountForNumbers.get(normalizedNovelId, normalizedTarget.targetJson).count
+          : sourcedChapterCountForRange.get(normalizedNovelId, normalizedTarget.startChapterNumber, normalizedTarget.endChapterNumber).count;
+        if (sourcedCount !== expectedCount) throw new ConflictError('translation target must contain only imported source chapters');
       }
       if (normalizedKey) {
         const existing = jobByIdempotencyKey.get(normalizedNovelId, type, normalizedKey);
