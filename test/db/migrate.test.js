@@ -23,6 +23,8 @@ test('migration creates library and source provenance tables', () => {
     'novels',
     'reading_progress',
     'schema_migrations',
+    'source_catalog_entries',
+    'source_catalogs',
     'translation_quality_findings',
     'translation_revisions'
   ]);
@@ -45,7 +47,7 @@ test('migrations are recorded once and source foreign keys are enforced', () => 
   migrate(database);
   migrate(database);
 
-  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 9);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 10);
   assert.throws(() => database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'missing-novel', 1, 'One', '2026-10-11T00:00:00.000Z'));
   assert.throws(() => database.prepare(`
     insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
@@ -172,7 +174,7 @@ test('version 8 databases with invalid job checkpoints require repair before mig
   assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 9').get().count, 0);
 });
 
-test('version 8 databases with valid job checkpoints upgrade through migration 9', (t) => {
+test('version 8 databases with valid job checkpoints upgrade through migration 10', (t) => {
   const database = openDatabase({ databasePath: ':memory:' });
   t.after(() => database.close());
   const now = '2026-10-15T00:00:00.000Z';
@@ -198,8 +200,44 @@ test('version 8 databases with valid job checkpoints upgrade through migration 9
 
   migrate(database);
 
-  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 9').get().count, 1);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 10').get().count, 1);
   assert.equal(database.prepare("select novel_id from chapters where id = 'chapter-a'").get().novel_id, 'novel-a');
+});
+
+test('version 9 databases retain valid durable job attempts through migration 10', (t) => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  const now = '2026-10-17T00:00:00.000Z';
+  for (const [version, name] of [
+    [1, '001-library.sql'],
+    [2, '002-sources.sql'],
+    [3, '003-normalize-kujiang-novel-source-urls.sql'],
+    [4, '004-translation-consistency.sql'],
+    [5, '005-enforce-translation-consistency-ownership.sql'],
+    [6, '006-guard-translation-consistency-parent-ownership.sql'],
+    [7, '007-durable-jobs-and-epub.sql'],
+    [8, '008-guard-job-targets-and-claims.sql'],
+    [9, '009-guard-job-checkpoint-chapter-ownership.sql']
+  ]) {
+    database.exec(readFileSync(new URL(`../../src/db/migrations/${name}`, import.meta.url), 'utf8'));
+    database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(version, now);
+  }
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
+  database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'novel-a', 1, 'One', now);
+  database.prepare(`
+    insert into jobs (id, novel_id, type, target_json, target_hash, state, priority, claimed_at, claim_token, current_chapter_id, created_at, updated_at)
+    values ('job-a', 'novel-a', 'translate_chapters', '{"chapterNumbers":[1]}', 'hash-a', 'running', 0, ?, 'claim-a', 'chapter-a', ?, ?)
+  `).run(now, now, now);
+  database.prepare(`
+    insert into job_attempts (id, job_id, novel_id, chapter_id, attempt_number, state, started_at, claim_token)
+    values ('attempt-a', 'job-a', 'novel-a', 'chapter-a', 1, 'started', ?, 'claim-a')
+  `).run(now);
+
+  migrate(database);
+
+  assert.equal(database.prepare('select count(*) as count from jobs where id = ?').get('job-a').count, 1);
+  assert.equal(database.prepare('select count(*) as count from job_attempts where id = ?').get('attempt-a').count, 1);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 10').get().count, 1);
 });
 
 test('source site identities are unique', () => {
