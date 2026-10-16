@@ -69,13 +69,20 @@ test('rejects missing, duplicate, paginated, unordered, and over-limit catalogs'
   const malformed = await readFile(new URL('../fixtures/kujiang/catalog-malformed.html', import.meta.url), 'utf8');
   const duplicate = await readFile(new URL('../fixtures/kujiang/catalog-duplicate.html', import.meta.url), 'utf8');
   const overflow = await readFile(new URL('../fixtures/kujiang/catalog-overflow.html', import.meta.url), 'utf8');
+  const externalPagination = await readFile(new URL('../fixtures/kujiang/catalog-external-pagination.html', import.meta.url), 'utf8');
   const paginated = '<section data-book-catalog><a href="/book/9/100">第一章</a><a data-catalog-pagination href="?page=2">下一页</a></section>';
   const unordered = '<section data-book-catalog><a href="/book/9/101">第二章</a><a href="/book/9/100">第一章</a></section>';
 
-  for (const html of [missing, malformed, duplicate, paginated, unordered]) {
+  for (const html of [missing, malformed, duplicate, paginated, externalPagination, unordered]) {
     assert.throws(() => parseKujiangCatalogHtml(html, bookUrl), ValidationError);
   }
   assert.throws(() => parseKujiangCatalogHtml(overflow, bookUrl, 2), /entry limit/);
+});
+
+test('does not mistake ordinary navigation for catalog continuation', async () => {
+  const html = await readFile(new URL('../fixtures/kujiang/catalog-ordinary-navigation.html', import.meta.url), 'utf8');
+
+  assert.equal(parseKujiangCatalogHtml(html, bookUrl).entries.length, 1);
 });
 
 test('ignores nested-template decoys and preserves rendered narrative Chinese from a static fixture', async () => {
@@ -200,6 +207,10 @@ test('fetches exactly one catalog document, preserves fetch guards, and revalida
     fetch: async () => htmlResponse('', { status: 302, headers: { location: 'https://example.com/book/9/catalog' } })
   });
   await assert.rejects(() => unsafe.fetchCatalog(bookUrl), SourceFetchError);
+  const differentBook = createKujiangAdapter({
+    fetch: async () => htmlResponse('', { status: 302, headers: { location: 'https://www.kujiang.com/book/10/catalog' } })
+  });
+  await assert.rejects(() => differentBook.fetchCatalog(bookUrl), SourceFetchError);
   await assert.rejects(
     () => createKujiangAdapter({ fetch: async () => new Response('not html', { headers: { 'content-type': 'text/plain' } }) }).fetchCatalog(bookUrl),
     SourceFetchError

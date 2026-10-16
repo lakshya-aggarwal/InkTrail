@@ -274,20 +274,32 @@ function catalogContainerElement(html) {
   ));
 }
 
-function catalogHasUnsupportedPagination(content, baseUrl) {
+function isCatalogContinuationLink(attributes, catalogUrl) {
+  try {
+    const target = new URL(attributes.href, catalogUrl);
+    const catalog = new URL(catalogUrl);
+    const query = [...target.searchParams.entries()];
+    const rel = (attributes.rel ?? '').toLowerCase().split(/\s+/);
+    const classNames = classes(attributes);
+    const isMarked = 'data-catalog-pagination' in attributes || rel.includes('next') || classNames.has('pagination') || classNames.has('pager') || classNames.has('page-next');
+
+    return isMarked &&
+      target.origin === catalog.origin &&
+      target.pathname === catalog.pathname &&
+      !target.hash &&
+      query.length === 1 &&
+      query[0][0] === 'page' &&
+      /^[1-9]\d*$/.test(query[0][1]);
+  } catch {
+    return false;
+  }
+}
+
+function catalogHasUnsupportedPagination(content, catalogUrl) {
   const anchors = /<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi;
   for (const anchor of content.matchAll(anchors)) {
     const attributes = attributesFrom(anchor[1]);
-    const classNames = classes(attributes);
-    if ('data-catalog-pagination' in attributes || attributes.rel?.toLowerCase() === 'next' || classNames.has('pagination') || classNames.has('pager') || classNames.has('page-next')) {
-      return true;
-    }
-    try {
-      const url = new URL(attributes.href, baseUrl);
-      if (url.pathname === new URL(baseUrl).pathname && url.searchParams.has('page')) return true;
-    } catch {
-      // Ignore malformed non-chapter links. They cannot be catalog entries.
-    }
+    if (isCatalogContinuationLink(attributes, catalogUrl)) return true;
   }
   return false;
 }
@@ -302,7 +314,7 @@ export function parseKujiangCatalogHtml(html, canonicalBookUrl, maxCatalogEntrie
   const catalog = catalogContainerElement(visibleHtml);
   if (!catalog) throw new ValidationError('source HTML is missing a book catalog');
   const catalogUrl = `${normalizedBookUrl}/catalog`;
-  if (catalogHasUnsupportedPagination(catalog.content, catalogUrl)) {
+  if (catalogHasUnsupportedPagination(visibleHtml, catalogUrl)) {
     throw new ValidationError('source HTML uses unsupported catalog pagination');
   }
 
@@ -493,8 +505,13 @@ export function createKujiangAdapter({ fetch, timeoutMs = DEFAULT_TIMEOUT_MS, ma
     async fetchCatalog(bookUrl) {
       const normalizedBookUrl = canonicalizeKujiangBookUrl(bookUrl);
       if (!normalizedBookUrl) throw new ValidationError('unsupported Kujiang book URL');
+      const catalogUrl = `${normalizedBookUrl}/catalog`;
+      const canonicalizeCatalogRedirect = (value) => {
+        const normalizedUrl = canonicalizeKujiangCatalogUrl(value);
+        return normalizedUrl === catalogUrl ? catalogUrl : null;
+      };
       try {
-        const html = await fetchHtml(fetch, `${normalizedBookUrl}/catalog`, timeoutMs, maxBodyBytes, canonicalizeKujiangCatalogUrl);
+        const html = await fetchHtml(fetch, catalogUrl, timeoutMs, maxBodyBytes, canonicalizeCatalogRedirect);
         return parseKujiangCatalogHtml(html, normalizedBookUrl, maxCatalogEntries);
       } catch (error) {
         if (error instanceof SourceFetchError || error instanceof ValidationError) throw error;
