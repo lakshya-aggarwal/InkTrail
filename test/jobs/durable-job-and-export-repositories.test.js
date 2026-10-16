@@ -12,6 +12,7 @@ import { createJobRepository } from '../../src/jobs/job-repository.js';
 import { createJobService } from '../../src/jobs/job-service.js';
 import { createNovelRepository } from '../../src/novels/novel-repository.js';
 import { createSourceRepository } from '../../src/sources/source-repository.js';
+import { createSourceCatalogRepository } from '../../src/sources/source-catalog-repository.js';
 
 function fixture(databasePath = ':memory:') {
   const database = openDatabase({ databasePath });
@@ -22,6 +23,7 @@ function fixture(databasePath = ':memory:') {
     novels: createNovelRepository(database, clock),
     chapters: createChapterRepository(database, clock),
     sources: createSourceRepository(database, clock),
+    catalogs: createSourceCatalogRepository(database, clock),
     jobs: createJobRepository(database, clock),
     exports: createExportRepository(database, clock)
   };
@@ -143,6 +145,88 @@ test('build EPUB jobs require an existing export owned by their novel', (t) => {
   assert.equal(claimed.id, job.id);
   const attempt = repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: job.id, claimToken: claimed.claimToken });
   assert.equal(repositories.jobs.finishAttempt({ jobId: job.id, attemptId: attempt.id, claimToken: claimed.claimToken, state: 'succeeded' }).state, 'succeeded');
+});
+
+test('source import jobs are catalog-scoped, durable, and progress by imported catalog entry', (t) => {
+  const repositories = fixture();
+  t.after(() => repositories.database.close());
+  const novel = repositories.novels.createNovel({ title: 'Catalog novel' });
+  const otherNovel = repositories.novels.createNovel({ title: 'Other catalog novel' });
+  const source = repositories.sources.createOrGetNovelSource({
+    novelId: novel.id,
+    site: 'catalog-fixture',
+    externalNovelId: 'catalog-novel',
+    sourceUrl: 'https://example.test/catalog-novel',
+    normalizedUrl: 'https://example.test/catalog-novel',
+    title: novel.title
+  });
+  const otherSource = repositories.sources.createOrGetNovelSource({
+    novelId: otherNovel.id,
+    site: 'catalog-fixture-other',
+    externalNovelId: 'other-catalog-novel',
+    sourceUrl: 'https://example.test/other-catalog-novel',
+    normalizedUrl: 'https://example.test/other-catalog-novel',
+    title: otherNovel.title
+  });
+  const snapshot = repositories.catalogs.createOrGetSnapshot({
+    novelId: novel.id,
+    novelSourceId: source.id,
+    site: source.site,
+    canonicalBookUrl: source.normalizedUrl,
+    contentSha256: 'a'.repeat(64),
+    entries: [
+      { ordinal: 1, externalChapterId: 'one', sourceUrl: 'https://example.test/catalog-novel/one', normalizedUrl: 'https://example.test/catalog-novel/one', sourceTitle: 'One' },
+      { ordinal: 2, externalChapterId: 'two', sourceUrl: 'https://example.test/catalog-novel/two', normalizedUrl: 'https://example.test/catalog-novel/two', sourceTitle: 'Two' }
+    ]
+  });
+  const otherSnapshot = repositories.catalogs.createOrGetSnapshot({
+    novelId: otherNovel.id,
+    novelSourceId: otherSource.id,
+    site: otherSource.site,
+    canonicalBookUrl: otherSource.normalizedUrl,
+    contentSha256: 'b'.repeat(64),
+    entries: [{ ordinal: 1, externalChapterId: 'other', sourceUrl: 'https://example.test/other-catalog-novel/other', normalizedUrl: 'https://example.test/other-catalog-novel/other', sourceTitle: 'Other' }]
+  });
+
+  const job = repositories.jobs.createSourceImportCatalogJob({ novelId: novel.id, target: { catalogId: snapshot.catalog.id }, idempotencyKey: 'catalog-key' });
+  assert.deepEqual(job.target, { catalogId: snapshot.catalog.id });
+  assert.equal(repositories.jobs.createSourceImportCatalogJob({ novelId: novel.id, target: { catalogId: snapshot.catalog.id }, idempotencyKey: 'catalog-key' }).id, job.id);
+  assert.throws(() => repositories.jobs.createSourceImportCatalogJob({ novelId: novel.id, target: { catalogId: otherSnapshot.catalog.id } }), NotFoundError);
+  assert.throws(() => repositories.jobs.createSourceImportCatalogJob({ novelId: novel.id, target: { catalogId: snapshot.catalog.id, extra: true } }), ValidationError);
+  assert.equal(repositories.jobs.claimNextRunnable({ claimToken: 'general-claim' }), null);
+  const claimed = repositories.jobs.claimNextRunnable({ claimToken: 'catalog-claim', type: 'source_import_catalog' });
+  assert.equal(claimed.id, job.id);
+  assert.equal(repositories.jobs.nextSourceImportCatalogEntry({ novelId: novel.id, jobId: job.id }).id, snapshot.entries[0].id);
+  assert.throws(() => repositories.jobs.startAttempt({ novelId: novel.id, jobId: job.id, catalogEntryId: otherSnapshot.entries[0].id, claimToken: claimed.claimToken }), ConflictError);
+  assert.throws(() => repositories.database.prepare('update jobs set current_catalog_entry_id = ? where id = ?').run(otherSnapshot.entries[0].id, job.id), /job checkpoint must belong to job novel/);
+  assert.throws(() => repositories.database.prepare(`
+    insert into job_attempts (id, job_id, novel_id, chapter_id, catalog_entry_id, attempt_number, state, started_at, claim_token)
+    values ('mixed-checkpoint', ?, ?, 'chapter-id', ?, 1, 'started', '2026-10-17T00:00:00.000Z', ?)
+  `).run(job.id, novel.id, snapshot.entries[0].id, claimed.claimToken));
+  const attempt = repositories.jobs.startAttempt({ novelId: novel.id, jobId: job.id, catalogEntryId: snapshot.entries[0].id, claimToken: claimed.claimToken });
+  assert.equal(attempt.catalogEntryId, snapshot.entries[0].id);
+  assert.equal(repositories.jobs.finishAttempt({ jobId: job.id, attemptId: attempt.id, claimToken: claimed.claimToken, state: 'succeeded' }).state, 'succeeded');
+  assert.throws(() => repositories.jobs.markSourceImportCatalogEntryCompleted({ novelId: novel.id, jobId: job.id, catalogEntryId: snapshot.entries[0].id, chapterId: 'missing', claimToken: claimed.claimToken }), ConflictError);
+
+  const chapter = repositories.chapters.recordChapter({ novelId: novel.id, chapterNumber: 1, title: 'One', originalText: 'One' });
+  repositories.sources.createChapterSource({
+    novelId: novel.id,
+    chapterId: chapter.id,
+    novelSourceId: source.id,
+    site: source.site,
+    externalChapterId: snapshot.entries[0].externalChapterId,
+    sourceUrl: snapshot.entries[0].sourceUrl,
+    normalizedUrl: snapshot.entries[0].normalizedUrl,
+    sourceTitle: snapshot.entries[0].sourceTitle,
+    previousSourceUrl: null,
+    nextSourceUrl: null,
+    fetchedAt: '2026-10-17T00:00:00.000Z',
+    contentSha256: 'c'.repeat(64)
+  });
+  assert.equal(repositories.jobs.markSourceImportCatalogEntryCompleted({ novelId: novel.id, jobId: job.id, catalogEntryId: snapshot.entries[0].id, chapterId: chapter.id, claimToken: claimed.claimToken }), true);
+  assert.equal(repositories.jobs.markSourceImportCatalogEntryCompleted({ novelId: novel.id, jobId: job.id, catalogEntryId: snapshot.entries[0].id, chapterId: chapter.id, claimToken: claimed.claimToken }), false);
+  assert.equal(repositories.jobs.nextSourceImportCatalogEntry({ novelId: novel.id, jobId: job.id }).id, snapshot.entries[1].id);
+  assert.equal(repositories.jobs.listJobEvents({ novelId: novel.id, jobId: job.id }).some((event) => event.catalogEntryId === snapshot.entries[0].id && event.type === 'catalog_entry_completed'), true);
 });
 
 test('EPUB snapshots capture sourced latest revisions in ascending order and stay immutable', (t) => {

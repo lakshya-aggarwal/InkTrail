@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { ConflictError, NotFoundError, ValidationError } from '../domain/errors.js';
 
-const jobTypes = new Set(['translate_chapters', 'build_epub']);
+const jobTypes = new Set(['translate_chapters', 'build_epub', 'source_import_catalog']);
 const jobStates = new Set(['queued', 'running', 'retrying', 'paused', 'failed', 'completed']);
 const attemptStates = new Set(['started', 'succeeded', 'retryable_failed', 'paused_after_failure', 'abandoned_on_recovery']);
-const eventTypes = new Set(['job_created', 'claimed', 'chapter_started', 'chapter_completed', 'retry_scheduled', 'paused', 'resumed', 'recovered', 'failed', 'completed']);
+const eventTypes = new Set(['job_created', 'claimed', 'chapter_started', 'chapter_completed', 'catalog_entry_started', 'catalog_entry_completed', 'retry_scheduled', 'paused', 'resumed', 'recovered', 'failed', 'completed']);
 const transitions = {
   queued: new Set(['paused']),
   running: new Set(['retrying', 'paused', 'failed', 'completed']),
@@ -74,6 +74,7 @@ function toJob(row) {
     claimedAt: row.claimed_at,
     claimToken: row.claim_token,
     currentChapterId: row.current_chapter_id,
+    currentCatalogEntryId: row.current_catalog_entry_id,
     lastErrorCode: row.last_error_code,
     lastErrorMessage: row.last_error_message,
     createdAt: row.created_at,
@@ -88,6 +89,7 @@ function toAttempt(row) {
     jobId: row.job_id,
     novelId: row.novel_id,
     chapterId: row.chapter_id,
+    catalogEntryId: row.catalog_entry_id,
     attemptNumber: row.attempt_number,
     state: row.state,
     startedAt: row.started_at,
@@ -103,6 +105,7 @@ function toEvent(row) {
     jobId: row.job_id,
     novelId: row.novel_id,
     chapterId: row.chapter_id,
+    catalogEntryId: row.catalog_entry_id,
     type: row.type,
     message: row.message,
     details: JSON.parse(row.details_json),
@@ -113,7 +116,7 @@ function toEvent(row) {
 function safeDetails(value) {
   const details = requireObject(value ?? {}, 'details');
   for (const [key, item] of Object.entries(details)) {
-    if (!['chapterId', 'attemptId', 'exportId', 'completedCount', 'remainingCount', 'attemptNumber'].includes(key)) {
+    if (!['chapterId', 'catalogEntryId', 'attemptId', 'exportId', 'completedCount', 'remainingCount', 'attemptNumber'].includes(key)) {
       throw new ValidationError('event details contain an unsupported field');
     }
     if (key.endsWith('Id') && (typeof item !== 'string' || item.trim().length === 0)) throw new ValidationError('event details contain an invalid id');
@@ -134,6 +137,8 @@ export function createJobRepository(database, clock) {
   const chapterInNovel = database.prepare('select 1 from chapters where id = ? and novel_id = ?');
   const chapterByIdInNovel = database.prepare('select chapter_number from chapters where id = ? and novel_id = ?');
   const exportInNovel = database.prepare('select 1 from epub_exports where id = ? and novel_id = ?');
+  const catalogInNovel = database.prepare('select 1 from source_catalogs where id = ? and novel_id = ?');
+  const catalogEntryInNovel = database.prepare('select * from source_catalog_entries where id = ? and novel_id = ?');
   const jobById = database.prepare('select * from jobs where id = ?');
   const jobInNovel = database.prepare('select * from jobs where id = ? and novel_id = ?');
   const jobByIdempotencyKey = database.prepare('select * from jobs where novel_id = ? and type = ? and idempotency_key = ?');
@@ -154,20 +159,20 @@ export function createJobRepository(database, clock) {
   const insertJob = database.prepare(`
     insert into jobs (
       id, novel_id, type, target_json, target_hash, idempotency_key, state, priority,
-      next_run_at, claimed_at, claim_token, current_chapter_id, last_error_code,
+      next_run_at, claimed_at, claim_token, current_chapter_id, current_catalog_entry_id, last_error_code,
       last_error_message, created_at, updated_at, completed_at
     ) values (
       @id, @novelId, @type, @targetJson, @targetHash, @idempotencyKey, @state, @priority,
-      null, null, null, null, null, null, @createdAt, @updatedAt, null
+      null, null, null, null, null, null, null, @createdAt, @updatedAt, null
     )
   `);
   const insertEvent = database.prepare(`
-    insert into job_events (id, job_id, novel_id, chapter_id, type, message, details_json, created_at)
-    values (@id, @jobId, @novelId, @chapterId, @type, @message, @detailsJson, @createdAt)
+    insert into job_events (id, job_id, novel_id, chapter_id, catalog_entry_id, type, message, details_json, created_at)
+    values (@id, @jobId, @novelId, @chapterId, @catalogEntryId, @type, @message, @detailsJson, @createdAt)
   `);
   const runnableJob = database.prepare(`
     select * from jobs
-    where (? is null or type = ?)
+    where ((? is null and type <> 'source_import_catalog') or type = ?)
       and state = 'queued' and (next_run_at is null or next_run_at <= ?)
       and (type <> 'translate_chapters' or not exists (
         select 1 from jobs as active_translation
@@ -224,16 +229,16 @@ export function createJobRepository(database, clock) {
   const updateJob = database.prepare(`
     update jobs
     set state = @state, next_run_at = @nextRunAt, claimed_at = @claimedAt, claim_token = @claimToken,
-      current_chapter_id = @currentChapterId, last_error_code = @lastErrorCode,
+      current_chapter_id = @currentChapterId, current_catalog_entry_id = @currentCatalogEntryId, last_error_code = @lastErrorCode,
       last_error_message = @lastErrorMessage, updated_at = @updatedAt, completed_at = @completedAt
     where id = @id and novel_id = @novelId and state = @fromState
       and (@expectedClaimToken is null or claim_token = @expectedClaimToken)
   `);
   const attemptById = database.prepare('select * from job_attempts where id = ? and job_id = ?');
-  const nextAttempt = database.prepare('select coalesce(max(attempt_number), 0) + 1 as attempt_number from job_attempts where job_id = ? and chapter_id is ?');
+  const nextAttempt = database.prepare('select coalesce(max(attempt_number), 0) + 1 as attempt_number from job_attempts where job_id = ? and chapter_id is ? and catalog_entry_id is ?');
   const insertAttempt = database.prepare(`
-    insert into job_attempts (id, job_id, novel_id, chapter_id, attempt_number, state, started_at, finished_at, error_code, error_message, claim_token)
-    values (@id, @jobId, @novelId, @chapterId, @attemptNumber, 'started', @startedAt, null, null, null, @claimToken)
+    insert into job_attempts (id, job_id, novel_id, chapter_id, catalog_entry_id, attempt_number, state, started_at, finished_at, error_code, error_message, claim_token)
+    values (@id, @jobId, @novelId, @chapterId, @catalogEntryId, @attemptNumber, 'started', @startedAt, null, null, null, @claimToken)
   `);
   const finishAttempt = database.prepare(`
     update job_attempts set state = @state, finished_at = @finishedAt, error_code = @errorCode, error_message = @errorMessage
@@ -251,6 +256,38 @@ export function createJobRepository(database, clock) {
   `);
   const revisionExists = database.prepare('select 1 from translation_revisions where chapter_id = ? limit 1');
   const completedEventExists = database.prepare("select 1 from job_events where job_id = ? and chapter_id = ? and type = 'chapter_completed' limit 1");
+  const nextUncompletedCatalogEntry = database.prepare(`
+    select entries.*
+    from source_catalog_entries as entries
+    join source_catalogs as catalogs on catalogs.id = entries.catalog_id
+    where entries.catalog_id = ?
+      and entries.novel_id = ?
+      and not (
+        exists (
+          select 1 from chapter_sources
+          where chapter_sources.novel_id = entries.novel_id
+            and chapter_sources.novel_source_id = catalogs.novel_source_id
+            and chapter_sources.normalized_url = entries.normalized_url
+        )
+        and exists (
+          select 1 from job_events
+          where job_events.catalog_entry_id = entries.id
+            and job_events.type = 'catalog_entry_completed'
+        )
+      )
+    order by entries.ordinal
+    limit 1
+  `);
+  const catalogEntryMapping = database.prepare(`
+    select chapter_sources.chapter_id
+    from source_catalog_entries as entries
+    join source_catalogs as catalogs on catalogs.id = entries.catalog_id
+    join chapter_sources on chapter_sources.novel_id = entries.novel_id
+      and chapter_sources.novel_source_id = catalogs.novel_source_id
+      and chapter_sources.normalized_url = entries.normalized_url
+    where entries.id = ? and entries.novel_id = ? and entries.catalog_id = ? and chapter_sources.chapter_id = ?
+  `);
+  const completedCatalogEntryEvent = database.prepare("select 1 from job_events where job_id = ? and catalog_entry_id = ? and type = 'catalog_entry_completed' limit 1");
   const setCheckpoint = database.prepare(`
     update jobs set current_chapter_id = ?, updated_at = ?
     where id = ? and novel_id = ? and state = 'running' and claim_token = ?
@@ -318,11 +355,19 @@ export function createJobRepository(database, clock) {
     if (!message) throw new ValidationError('event message is required');
     const chapterId = input.chapterId ?? null;
     if (chapterId !== null && !chapterInNovel.get(requireId(chapterId, 'chapterId'), job.novel_id)) throw new NotFoundError('chapter not found');
+    const catalogEntryId = input.catalogEntryId ?? null;
+    if (catalogEntryId !== null) {
+      const entry = catalogEntryInNovel.get(requireId(catalogEntryId, 'catalogEntryId'), job.novel_id);
+      if (!entry || job.type !== 'source_import_catalog' || entry.catalog_id !== JSON.parse(job.target_json).catalogId) {
+        throw new NotFoundError('catalog entry not found');
+      }
+    }
     const event = {
       id: randomUUID(),
       jobId: job.id,
       novelId: job.novel_id,
       chapterId,
+      catalogEntryId,
       type,
       message,
       detailsJson: safeDetails(input.details),
@@ -339,16 +384,27 @@ export function createJobRepository(database, clock) {
     if (!Number.isSafeInteger(priority)) throw new ValidationError('priority must be an integer');
     const normalizedTarget = type === 'translate_chapters'
       ? canonicalizeChapterTarget(target)
-      : (() => {
+      : type === 'build_epub'
+        ? (() => {
           const exportId = requireId(requireObject(target, 'target').exportId, 'exportId');
           const targetJson = JSON.stringify({ exportId });
           return { targetJson, targetHash: hash(targetJson), exportId };
+        })()
+        : (() => {
+          const sourceTarget = requireObject(target, 'target');
+          if (Object.keys(sourceTarget).length !== 1 || !Object.hasOwn(sourceTarget, 'catalogId')) throw new ValidationError('target must contain only catalogId');
+          const catalogId = requireId(sourceTarget.catalogId, 'catalogId');
+          const targetJson = JSON.stringify({ catalogId });
+          return { targetJson, targetHash: hash(targetJson), catalogId };
         })();
     const normalizedKey = idempotencyKey === null || idempotencyKey === undefined ? null : requireId(idempotencyKey, 'idempotencyKey');
 
     return transaction(() => {
       if (type === 'build_epub' && !exportInNovel.get(normalizedTarget.exportId, normalizedNovelId)) {
         throw new NotFoundError('EPUB export not found');
+      }
+      if (type === 'source_import_catalog' && !catalogInNovel.get(normalizedTarget.catalogId, normalizedNovelId)) {
+        throw new NotFoundError('source catalog not found');
       }
       if (type === 'translate_chapters') {
         const expectedCount = normalizedTarget.chapterNumbers?.length
@@ -405,6 +461,56 @@ export function createJobRepository(database, clock) {
       return createJob({ ...requireObject(input), type: 'build_epub' }, (action) => action());
     },
 
+    createSourceImportCatalogJob(input) {
+      return createJob({ ...requireObject(input), type: 'source_import_catalog' });
+    },
+
+    nextSourceImportCatalogEntry(input) {
+      const { novelId, jobId } = requireObject(input);
+      const id = requireNovel(novelId);
+      const job = jobInNovel.get(requireId(jobId, 'jobId'), id);
+      if (!job) throw new NotFoundError('job not found');
+      if (job.type !== 'source_import_catalog') throw new ConflictError('job is not a source import');
+      const entry = nextUncompletedCatalogEntry.get(JSON.parse(job.target_json).catalogId, id);
+      return entry ? {
+        id: entry.id,
+        catalogId: entry.catalog_id,
+        novelId: entry.novel_id,
+        ordinal: entry.ordinal,
+        externalChapterId: entry.external_chapter_id,
+        sourceUrl: entry.source_url,
+        normalizedUrl: entry.normalized_url,
+        sourceTitle: entry.source_title
+      } : null;
+    },
+
+    markSourceImportCatalogEntryCompleted(input) {
+      const { novelId, jobId, catalogEntryId, chapterId, claimToken } = requireObject(input);
+      const id = requireNovel(novelId);
+      const entryId = requireId(catalogEntryId, 'catalogEntryId');
+      const sourceChapterId = requireId(chapterId, 'chapterId');
+      const token = requireId(claimToken, 'claimToken');
+      return withinTransaction(() => {
+        const job = jobInNovel.get(requireId(jobId, 'jobId'), id);
+        if (!job) throw new NotFoundError('job not found');
+        if (job.type !== 'source_import_catalog' || job.state !== 'running' || job.claim_token !== token) {
+          throw new ConflictError('source import job claim is no longer active');
+        }
+        const catalogId = JSON.parse(job.target_json).catalogId;
+        if (!catalogEntryMapping.get(entryId, id, catalogId, sourceChapterId)) {
+          throw new ConflictError('catalog entry has not been imported');
+        }
+        if (completedCatalogEntryEvent.get(job.id, entryId)) return false;
+        appendEvent(job, {
+          type: 'catalog_entry_completed',
+          message: 'Catalog entry completed.',
+          catalogEntryId: entryId,
+          details: { catalogEntryId: entryId }
+        });
+        return true;
+      });
+    },
+
     getJob(input) {
       const { novelId, jobId } = requireObject(input);
       const job = jobInNovel.get(requireId(jobId, 'jobId'), requireNovel(novelId));
@@ -433,7 +539,7 @@ export function createJobRepository(database, clock) {
     },
 
     transitionJob(input) {
-      const { novelId, jobId, toState, nextRunAt = null, currentChapterId = null, errorCode = null, errorMessage = null, claimToken = null } = requireObject(input);
+      const { novelId, jobId, toState, nextRunAt = null, currentChapterId = null, currentCatalogEntryId = null, errorCode = null, errorMessage = null, claimToken = null } = requireObject(input);
       const id = requireNovel(novelId);
       const expectedClaimToken = claimToken === null ? null : requireId(claimToken, 'claimToken');
       if (!jobStates.has(toState)) throw new ValidationError('job state is invalid');
@@ -443,6 +549,11 @@ export function createJobRepository(database, clock) {
         if (!transitions[job.state].has(toState)) throw new ConflictError('job state transition is not allowed');
         const chapterId = currentChapterId === null ? job.current_chapter_id : requireId(currentChapterId, 'currentChapterId');
         if (chapterId !== null && !chapterInNovel.get(chapterId, id)) throw new NotFoundError('chapter not found');
+        const catalogEntryId = currentCatalogEntryId === null ? job.current_catalog_entry_id : requireId(currentCatalogEntryId, 'currentCatalogEntryId');
+        if (catalogEntryId !== null) {
+          const entry = catalogEntryInNovel.get(catalogEntryId, id);
+          if (!entry || job.type !== 'source_import_catalog' || entry.catalog_id !== JSON.parse(job.target_json).catalogId) throw new NotFoundError('catalog entry not found');
+        }
         const now = clock().toISOString();
         const updated = {
           id: job.id,
@@ -454,6 +565,7 @@ export function createJobRepository(database, clock) {
           claimedAt: toState === 'running' ? job.claimed_at : null,
           claimToken: toState === 'running' ? job.claim_token : null,
           currentChapterId: chapterId,
+          currentCatalogEntryId: catalogEntryId,
           lastErrorCode: requireOptionalText(errorCode, 'errorCode'),
           lastErrorMessage: requireOptionalText(errorMessage, 'errorMessage'),
           updatedAt: now,
@@ -467,7 +579,7 @@ export function createJobRepository(database, clock) {
           failed: 'failed',
           completed: 'completed'
         }[toState] ?? (job.state === 'paused' ? 'resumed' : 'recovered');
-        appendEvent(transitioned, { type: eventType, message: `Job ${toState}.`, chapterId, details: chapterId ? { chapterId } : {} });
+        appendEvent(transitioned, { type: eventType, message: `Job ${toState}.`, chapterId, catalogEntryId, details: catalogEntryId ? { catalogEntryId } : chapterId ? { chapterId } : {} });
         return toJob(transitioned);
       });
     },
@@ -480,7 +592,7 @@ export function createJobRepository(database, clock) {
     },
 
     startAttempt(input) {
-      const { novelId, jobId, chapterId = null, claimToken } = requireObject(input);
+      const { novelId, jobId, chapterId = null, catalogEntryId = null, claimToken } = requireObject(input);
       const id = requireNovel(novelId);
       const token = requireId(claimToken, 'claimToken');
       return withinTransaction(() => {
@@ -490,7 +602,10 @@ export function createJobRepository(database, clock) {
         if (!job.claim_token || job.claim_token !== token) throw new ConflictError('job claim is no longer active');
         if (job.type === 'translate_chapters' && chapterId === null) throw new ValidationError('chapterId is required for translation attempts');
         if (job.type === 'build_epub' && chapterId !== null) throw new ValidationError('chapterId is not allowed for EPUB attempts');
+        if (job.type === 'source_import_catalog' && (catalogEntryId === null || chapterId !== null)) throw new ValidationError('source import attempts require only catalogEntryId');
+        if (job.type !== 'source_import_catalog' && catalogEntryId !== null) throw new ValidationError('catalogEntryId is only allowed for source import attempts');
         const normalizedChapterId = chapterId === null ? null : requireId(chapterId, 'chapterId');
+        const normalizedCatalogEntryId = catalogEntryId === null ? null : requireId(catalogEntryId, 'catalogEntryId');
         const chapter = normalizedChapterId === null ? null : chapterByIdInNovel.get(normalizedChapterId, id);
         if (normalizedChapterId && !chapter) throw new NotFoundError('chapter not found');
         if (job.type === 'translate_chapters' && !targetIncludesChapter(job, chapter.chapter_number)) {
@@ -499,17 +614,22 @@ export function createJobRepository(database, clock) {
         if (job.type === 'build_epub' && !exportInNovel.get(JSON.parse(job.target_json).exportId, id)) {
           throw new ConflictError('EPUB job target is not available');
         }
+        if (job.type === 'source_import_catalog') {
+          const entry = catalogEntryInNovel.get(normalizedCatalogEntryId, id);
+          if (!entry || entry.catalog_id !== JSON.parse(job.target_json).catalogId) throw new ConflictError('catalog entry is not in the job target');
+        }
         const attempt = {
           id: randomUUID(),
           jobId: job.id,
           novelId: id,
           chapterId: normalizedChapterId,
-          attemptNumber: nextAttempt.get(job.id, normalizedChapterId).attempt_number,
+          catalogEntryId: normalizedCatalogEntryId,
+          attemptNumber: nextAttempt.get(job.id, normalizedChapterId, normalizedCatalogEntryId).attempt_number,
           startedAt: clock().toISOString(),
           claimToken: token
         };
         insertAttempt.run(attempt);
-        appendEvent(job, { type: 'chapter_started', message: 'Checkpoint started.', chapterId: normalizedChapterId, details: normalizedChapterId ? { chapterId: normalizedChapterId, attemptNumber: attempt.attemptNumber } : { attemptNumber: attempt.attemptNumber } });
+        appendEvent(job, { type: normalizedCatalogEntryId ? 'catalog_entry_started' : 'chapter_started', message: 'Checkpoint started.', chapterId: normalizedChapterId, catalogEntryId: normalizedCatalogEntryId, details: normalizedCatalogEntryId ? { catalogEntryId: normalizedCatalogEntryId, attemptNumber: attempt.attemptNumber } : normalizedChapterId ? { chapterId: normalizedChapterId, attemptNumber: attempt.attemptNumber } : { attemptNumber: attempt.attemptNumber } });
         return toAttempt(attemptById.get(attempt.id, job.id));
       });
     },
@@ -670,8 +790,14 @@ export function createJobRepository(database, clock) {
         if (finishAttempt.run({ id: attempt.id, jobId: job.id, claimToken: normalizedClaimToken, state, finishedAt, errorCode: requireOptionalText(errorCode, 'errorCode'), errorMessage: requireOptionalText(errorMessage, 'errorMessage') }).changes === 0) {
           throw new ConflictError('job attempt is no longer active');
         }
-        if (state === 'succeeded') {
-          appendEvent(job, { type: 'chapter_completed', message: 'Checkpoint completed.', chapterId: attempt.chapter_id, details: attempt.chapter_id ? { chapterId: attempt.chapter_id, attemptNumber: attempt.attempt_number } : { attemptNumber: attempt.attempt_number } });
+        if (state === 'succeeded' && !attempt.catalog_entry_id) {
+          appendEvent(job, {
+            type: attempt.catalog_entry_id ? 'catalog_entry_completed' : 'chapter_completed',
+            message: 'Checkpoint completed.',
+            chapterId: attempt.chapter_id,
+            catalogEntryId: attempt.catalog_entry_id,
+            details: attempt.catalog_entry_id ? { catalogEntryId: attempt.catalog_entry_id, attemptNumber: attempt.attempt_number } : attempt.chapter_id ? { chapterId: attempt.chapter_id, attemptNumber: attempt.attempt_number } : { attemptNumber: attempt.attempt_number }
+          });
         }
         return toAttempt(attemptById.get(attempt.id, job.id));
       });

@@ -74,6 +74,7 @@ export function createSourceCatalogRepository(database, clock) {
   const novelSource = database.prepare('select * from novel_sources where id = ?');
   const catalogByIdentity = database.prepare('select * from source_catalogs where novel_source_id = ? and content_sha256 = ?');
   const catalogInNovel = database.prepare('select * from source_catalogs where id = ? and novel_id = ?');
+  const entryInCatalog = database.prepare('select * from source_catalog_entries where id = ? and catalog_id = ? and novel_id = ?');
   const entriesForCatalog = database.prepare('select * from source_catalog_entries where catalog_id = ? order by ordinal');
   const insertCatalog = database.prepare(`
     insert into source_catalogs (
@@ -151,6 +152,13 @@ export function createSourceCatalogRepository(database, clock) {
     createOrGetSnapshotInTransaction,
 
     getSnapshot,
+
+    getEntry(input) {
+      const { novelId, catalogId, catalogEntryId } = requireObject(input);
+      const row = entryInCatalog.get(requireText(catalogEntryId, 'catalogEntryId'), requireText(catalogId, 'catalogId'), requireText(novelId, 'novelId'));
+      if (!row) throw new NotFoundError('source catalog entry not found');
+      return toEntry(row);
+    },
 
     listSnapshots(novelId) {
       const id = requireText(novelId, 'novelId');

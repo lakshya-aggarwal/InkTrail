@@ -50,6 +50,8 @@ test('creates immutable ordered metadata snapshots without chapter side effects'
   assert.deepEqual(first.entries.map(({ ordinal, sourceTitle }) => ({ ordinal, sourceTitle })), [{ ordinal: 1, sourceTitle: 'One' }, { ordinal: 2, sourceTitle: 'Two' }]);
   assert.equal(database.prepare('select count(*) as count from chapters').get().count, 0);
   assert.equal(database.prepare('select count(*) as count from chapter_sources').get().count, 0);
+  assert.equal(catalogs.getEntry({ novelId: novel.id, catalogId: first.catalog.id, catalogEntryId: first.entries[0].id }).sourceTitle, 'One');
+  assert.throws(() => catalogs.getEntry({ novelId: novel.id, catalogId: first.catalog.id, catalogEntryId: 'missing' }), /source catalog entry not found/);
   assert.throws(() => database.prepare("update source_catalog_entries set source_title = 'Changed' where id = ?").run(first.entries[0].id), /immutable/);
   assert.throws(() => database.prepare('delete from source_catalogs where id = ?').run(first.catalog.id), /immutable/);
 });

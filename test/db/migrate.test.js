@@ -47,7 +47,7 @@ test('migrations are recorded once and source foreign keys are enforced', () => 
   migrate(database);
   migrate(database);
 
-  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 10);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 11);
   assert.throws(() => database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'missing-novel', 1, 'One', '2026-10-11T00:00:00.000Z'));
   assert.throws(() => database.prepare(`
     insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
@@ -238,6 +238,59 @@ test('version 9 databases retain valid durable job attempts through migration 10
   assert.equal(database.prepare('select count(*) as count from jobs where id = ?').get('job-a').count, 1);
   assert.equal(database.prepare('select count(*) as count from job_attempts where id = ?').get('attempt-a').count, 1);
   assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 10').get().count, 1);
+});
+
+test('version 10 databases with malformed durable attempts require repair before migration 11', (t) => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  const now = '2026-10-17T00:00:00.000Z';
+  for (const [version, name] of [
+    [1, '001-library.sql'], [2, '002-sources.sql'], [3, '003-normalize-kujiang-novel-source-urls.sql'],
+    [4, '004-translation-consistency.sql'], [5, '005-enforce-translation-consistency-ownership.sql'],
+    [6, '006-guard-translation-consistency-parent-ownership.sql'], [7, '007-durable-jobs-and-epub.sql'],
+    [8, '008-guard-job-targets-and-claims.sql'], [9, '009-guard-job-checkpoint-chapter-ownership.sql'],
+    [10, '010-kujiang-source-catalogs.sql']
+  ]) {
+    database.exec(readFileSync(new URL(`../../src/db/migrations/${name}`, import.meta.url), 'utf8'));
+    database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(version, now);
+  }
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
+  database.prepare(`insert into jobs (id, novel_id, type, target_json, target_hash, state, priority, claimed_at, claim_token, created_at, updated_at)
+    values ('job-a', 'novel-a', 'translate_chapters', '{"chapterNumbers":[1]}', 'hash-a', 'running', 0, ?, 'claim-a', ?, ?)`)
+    .run(now, now, now);
+  database.exec('drop trigger job_attempts_ownership_on_insert; drop trigger job_attempts_target_on_insert;');
+  database.prepare(`insert into job_attempts (id, job_id, novel_id, chapter_id, attempt_number, state, started_at, claim_token)
+    values ('attempt-a', 'job-a', 'novel-a', null, 1, 'started', ?, 'claim-a')`).run(now);
+
+  assert.throws(() => migrate(database), /repair required: invalid durable job records/);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 11').get().count, 0);
+});
+
+test('version 10 databases preserve existing EPUB job references through migration 11', (t) => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  const now = '2026-10-17T00:00:00.000Z';
+  for (const [version, name] of [
+    [1, '001-library.sql'], [2, '002-sources.sql'], [3, '003-normalize-kujiang-novel-source-urls.sql'],
+    [4, '004-translation-consistency.sql'], [5, '005-enforce-translation-consistency-ownership.sql'],
+    [6, '006-guard-translation-consistency-parent-ownership.sql'], [7, '007-durable-jobs-and-epub.sql'],
+    [8, '008-guard-job-targets-and-claims.sql'], [9, '009-guard-job-checkpoint-chapter-ownership.sql'],
+    [10, '010-kujiang-source-catalogs.sql']
+  ]) {
+    database.exec(readFileSync(new URL(`../../src/db/migrations/${name}`, import.meta.url), 'utf8'));
+    database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(version, now);
+  }
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
+  database.prepare(`insert into epub_exports (id, novel_id, job_id, state, selection_json, snapshot_at, file_name, created_at, updated_at)
+    values ('export-a', 'novel-a', null, 'queued', '{"chapterNumbers":[1]}', ?, 'export-a.epub', ?, ?)`).run(now, now, now);
+  database.prepare(`insert into jobs (id, novel_id, type, target_json, target_hash, state, priority, created_at, updated_at)
+    values ('job-a', 'novel-a', 'build_epub', '{"exportId":"export-a"}', 'hash-a', 'queued', 0, ?, ?)`).run(now, now);
+  database.prepare("update epub_exports set job_id = 'job-a' where id = 'export-a'").run();
+
+  migrate(database);
+
+  assert.equal(database.prepare("select job_id from epub_exports where id = 'export-a'").get().job_id, 'job-a');
+  assert.equal(database.prepare("select type from jobs where id = 'job-a'").get().type, 'build_epub');
 });
 
 test('source site identities are unique', () => {
