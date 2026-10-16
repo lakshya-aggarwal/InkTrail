@@ -19,6 +19,31 @@
       </aside>
       <section aria-labelledby="chapter-title" id="reader">
         <nav aria-label="Chapter navigation" class="chapter-navigation"><button type="button" data-direction="previous" aria-label="Previous chapter">Previous</button><button type="button" data-direction="next" aria-label="Next chapter">Next</button></nav>
+        <section aria-label="Translation workspace" hidden id="translation-workspace">
+          <div class="workspace-heading"><p class="eyebrow">Workspace</p><h2>Continue this novel</h2></div>
+          <form id="workspace-form" novalidate>
+            <fieldset>
+              <legend>Chapter range</legend>
+              <label for="workspace-from">From</label>
+              <input id="workspace-from" min="1" name="from" required type="number">
+              <label for="workspace-to">To</label>
+              <input id="workspace-to" min="1" name="to" required type="number">
+            </fieldset>
+            <div class="workspace-actions">
+              <button id="queue-translation" type="submit">Queue translation</button>
+              <button id="create-epub" type="button">Create EPUB</button>
+            </div>
+          </form>
+          <p id="workspace-status" role="status" tabindex="-1"></p>
+          <div id="workspace-job" hidden>
+            <p id="workspace-job-status" role="status"></p>
+            <button id="workspace-job-control" type="button"></button>
+          </div>
+          <div id="workspace-export" hidden>
+            <p id="workspace-export-status" role="status"></p>
+            <a hidden id="workspace-export-download">Download EPUB</a>
+          </div>
+        </section>
         <p id="chapter-number"></p>
         <h1 id="chapter-title" tabindex="-1">Choose a novel</h1>
         <article id="chapter-text"><p>Select a novel from your shelf to begin reading.</p></article>

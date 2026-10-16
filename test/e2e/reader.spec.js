@@ -30,10 +30,31 @@ async function seedTranslatedSourceChapter(request, { title = 'Translated novel'
   return { novelId: novelBody.id, translation: translationBody };
 }
 
+async function seedSourcedChapters(request, { title = 'Sourced novel', sourceUrls }) {
+  const novel = await request.post('/api/v1/novels', { data: { title } });
+  const novelBody = await novel.json();
+
+  for (const [index, sourceUrl] of sourceUrls.entries()) {
+    const imported = await request.post(`/api/v1/novels/${novelBody.id}/source-chapters`, {
+      data: { sourceUrl, chapterNumber: index + 1 }
+    });
+    expect(imported.ok(), await imported.text()).toBeTruthy();
+  }
+
+  return novelBody.id;
+}
+
 function fixtureChapterUrl(testInfo, sourceId) {
   const projectOffset = testInfo.project.name === 'desktop-chromium' ? 910000 : 920000;
   const externalId = projectOffset + sourceId;
   return `https://www.kujiang.com/book/${externalId}/${externalId}`;
+}
+
+function fixtureControlChapterUrl(testInfo, sourceId, mode) {
+  const projectOffset = testInfo.project.name === 'desktop-chromium' ? 910000 : 920000;
+  const externalNovelId = projectOffset + sourceId;
+  const externalChapterId = `7${externalNovelId}${sourceId}${mode}`;
+  return `https://www.kujiang.com/book/${externalNovelId}/${externalChapterId}`;
 }
 
 async function readProgress(request, novelId) {
@@ -150,4 +171,76 @@ test('reader keeps feedback errors visible and focused', async ({ page }, testIn
   await page.getByRole('button', { name: 'Cancel' }).click();
   await expect(page.locator('#feedback-status')).toBeEmpty();
   await expect(page.getByRole('button', { name: 'Report a translation issue' })).toBeFocused();
+});
+
+test('workspace queues the current sourced chapter and retains durable status after reload', async ({ page }, testInfo) => {
+  const novelId = await seedSourcedChapters(page.request, { sourceUrls: [fixtureChapterUrl(testInfo, 11)] });
+  await page.goto(`/?novel=${novelId}&chapter=1`);
+
+  await expect(page.locator('#translation-workspace')).toBeVisible();
+  await expect(page.getByLabel('From')).toHaveValue('1');
+  await expect(page.getByLabel('To')).toHaveValue('1');
+  await page.getByRole('button', { name: 'Queue translation' }).click();
+  await expect(page.locator('#workspace-job-status')).toHaveText('Translation is completed after 1 attempt.');
+
+  await page.reload();
+  await expect(page.locator('#workspace-job-status')).toHaveText('Translation is completed after 1 attempt.');
+});
+
+test('workspace pauses and resumes a durable translation', async ({ page }, testInfo) => {
+  const novelId = await seedSourcedChapters(page.request, {
+    title: 'Paused workspace novel',
+    sourceUrls: [fixtureControlChapterUrl(testInfo, 13, 8)]
+  });
+  await page.goto(`/?novel=${novelId}&chapter=1`);
+
+  await page.getByRole('button', { name: 'Queue translation' }).click();
+  await expect(page.getByRole('button', { name: 'Pause translation' })).toBeVisible();
+  await page.getByRole('button', { name: 'Pause translation' }).click();
+  await expect(page.getByRole('button', { name: 'Resume translation' })).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Resume translation' })).toBeVisible();
+  await page.getByRole('button', { name: 'Resume translation' }).click();
+  await expect(page.locator('#workspace-job-status')).toHaveText(/Translation is (queued|running|completed) after \d+ attempts?\./);
+});
+
+test('workspace reports the fourth retry failure as paused', async ({ page }, testInfo) => {
+  const novelId = await seedSourcedChapters(page.request, {
+    title: 'Unavailable workspace novel',
+    sourceUrls: [fixtureControlChapterUrl(testInfo, 14, 9)]
+  });
+  await page.goto(`/?novel=${novelId}&chapter=1`);
+
+  await page.getByRole('button', { name: 'Queue translation' }).click();
+  await expect(page.locator('#workspace-job-status')).toHaveText('Translation is paused after 4 attempts.', { timeout: 10_000 });
+  await expect(page.getByRole('button', { name: 'Resume translation' })).toBeVisible();
+});
+
+test('workspace downloads an available EPUB while another chapter translates', async ({ page }, testInfo) => {
+  const novelId = await seedSourcedChapters(page.request, {
+    title: 'Concurrent workspace novel',
+    sourceUrls: [fixtureChapterUrl(testInfo, 12), fixtureControlChapterUrl(testInfo, 12, 8)]
+  });
+  const directTranslation = await page.request.post(`/api/v1/novels/${novelId}/chapters/1/translations`);
+  expect(directTranslation.ok(), await directTranslation.text()).toBeTruthy();
+  await page.goto(`/?novel=${novelId}&chapter=1`);
+
+  await page.getByLabel('From').fill('2');
+  await page.getByLabel('To').fill('2');
+  await page.getByRole('button', { name: 'Queue translation' }).click();
+  await expect(page.getByRole('button', { name: 'Pause translation' })).toBeVisible();
+
+  await page.getByLabel('From').fill('1');
+  await page.getByLabel('To').fill('1');
+  await page.getByRole('button', { name: 'Create EPUB' }).click();
+  await expect(page.locator('#workspace-job-status')).toHaveText(/Translation is (queued|running|completed) after 1 attempt\./);
+  const downloadLink = page.getByRole('link', { name: 'Download EPUB' });
+  await expect(downloadLink).toBeVisible();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    downloadLink.click()
+  ]);
+  expect(download.suggestedFilename()).toMatch(/\.epub$/);
+  await expect(page.locator('#workspace-job-status')).toHaveText('Translation is completed after 1 attempt.');
 });

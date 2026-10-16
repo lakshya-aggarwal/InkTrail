@@ -15,9 +15,26 @@ const feedbackCorrection = document.querySelector('#feedback-correction');
 const feedbackReason = document.querySelector('#feedback-reason');
 const feedbackStatus = document.querySelector('#feedback-status');
 const readerStatus = document.querySelector('#reader-status');
+const workspace = document.querySelector('#translation-workspace');
+const workspaceForm = document.querySelector('#workspace-form');
+const workspaceFrom = document.querySelector('#workspace-from');
+const workspaceTo = document.querySelector('#workspace-to');
+const queueTranslation = document.querySelector('#queue-translation');
+const createEpub = document.querySelector('#create-epub');
+const workspaceStatus = document.querySelector('#workspace-status');
+const workspaceJob = document.querySelector('#workspace-job');
+const workspaceJobStatus = document.querySelector('#workspace-job-status');
+const workspaceJobControl = document.querySelector('#workspace-job-control');
+const workspaceExport = document.querySelector('#workspace-export');
+const workspaceExportStatus = document.querySelector('#workspace-export-status');
+const workspaceExportDownload = document.querySelector('#workspace-export-download');
 
 let novels = [];
 let currentChapter = null;
+let workspacePoll = null;
+let workspaceToken = 0;
+
+const activeStates = new Set(['queued', 'running', 'retrying']);
 
 function readerState() {
   const query = new URLSearchParams(window.location.search);
@@ -35,6 +52,116 @@ async function request(path, options) {
   throw new Error(body?.error?.message || 'The library could not be updated.');
 }
 
+function stopWorkspacePolling() {
+  if (workspacePoll !== null) window.clearTimeout(workspacePoll);
+  workspacePoll = null;
+}
+
+function setWorkspaceStatus(message, { error = false } = {}) {
+  workspaceStatus.setAttribute('role', error ? 'alert' : 'status');
+  workspaceStatus.textContent = message;
+}
+
+function clearWorkspaceStatus() {
+  workspaceStatus.setAttribute('role', 'status');
+  workspaceStatus.textContent = '';
+}
+
+function hideWorkspace() {
+  workspaceToken += 1;
+  stopWorkspacePolling();
+  workspace.hidden = true;
+  workspaceJob.hidden = true;
+  workspaceExport.hidden = true;
+  workspaceExportDownload.hidden = true;
+  clearWorkspaceStatus();
+}
+
+function rangeSelection() {
+  const from = Number(workspaceFrom.value);
+  const to = Number(workspaceTo.value);
+  if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 1 || to < from) {
+    throw new Error('Choose a valid chapter range.');
+  }
+  return { chapterNumbers: Array.from({ length: to - from + 1 }, (_, index) => from + index) };
+}
+
+function workspaceStillSelected(novelId, token) {
+  return workspaceToken === token && currentChapter?.novelId === novelId;
+}
+
+function renderWorkspaceJob(job) {
+  if (!job) {
+    workspaceJob.hidden = true;
+    return;
+  }
+  workspaceJob.hidden = false;
+  const attempts = job.attemptCount === 1 ? '1 attempt' : `${job.attemptCount} attempts`;
+  workspaceJobStatus.textContent = `Translation is ${job.state} after ${attempts}.`;
+  const controllable = activeStates.has(job.state) || job.state === 'paused';
+  workspaceJobControl.hidden = !controllable;
+  if (controllable) workspaceJobControl.textContent = job.state === 'paused' ? 'Resume translation' : 'Pause translation';
+  workspaceJobControl.dataset.jobId = job.id;
+  workspaceJobControl.dataset.action = job.state === 'paused' ? 'resume' : 'pause';
+}
+
+function renderWorkspaceExport(exportItem, novelId) {
+  if (!exportItem) {
+    workspaceExport.hidden = true;
+    return;
+  }
+  workspaceExport.hidden = false;
+  workspaceExportStatus.textContent = `EPUB is ${exportItem.state}.`;
+  const available = exportItem.state === 'available';
+  workspaceExportDownload.hidden = !available;
+  if (available) workspaceExportDownload.href = `/api/v1/novels/${encodeURIComponent(novelId)}/exports/${encodeURIComponent(exportItem.id)}/download`;
+}
+
+function scheduleWorkspaceRefresh(novelId, token) {
+  stopWorkspacePolling();
+  workspacePoll = window.setTimeout(() => {
+    workspacePoll = null;
+    void refreshWorkspace(novelId, token);
+  }, 1_000);
+}
+
+async function refreshWorkspace(novelId, token = workspaceToken) {
+  try {
+    const [jobs, exports] = await Promise.all([
+      request(`/api/v1/jobs?novelId=${encodeURIComponent(novelId)}`),
+      request(`/api/v1/novels/${encodeURIComponent(novelId)}/exports`)
+    ]);
+    if (!workspaceStillSelected(novelId, token)) return;
+    const translationJobs = jobs.items.filter((job) => job.type === 'translate_chapters');
+    const translationJob = translationJobs.find((job) => activeStates.has(job.state) || job.state === 'paused') ?? translationJobs[0];
+    const exportItem = exports.items.find((item) => activeStates.has(item.state) || item.state === 'building') ?? exports.items[0];
+    renderWorkspaceJob(translationJob);
+    renderWorkspaceExport(exportItem, novelId);
+    const hasActiveWork = Boolean(
+      translationJobs.some((job) => activeStates.has(job.state)) ||
+      exports.items.some((item) => activeStates.has(item.state) || item.state === 'building')
+    );
+    if (hasActiveWork) scheduleWorkspaceRefresh(novelId, token);
+    else stopWorkspacePolling();
+  } catch (error) {
+    if (workspaceStillSelected(novelId, token)) setWorkspaceStatus(error.message, { error: true });
+  }
+}
+
+function showWorkspace(chapter) {
+  workspaceToken += 1;
+  const token = workspaceToken;
+  stopWorkspacePolling();
+  workspace.hidden = false;
+  workspaceFrom.value = String(chapter.chapterNumber);
+  workspaceTo.value = String(chapter.chapterNumber);
+  workspaceJob.hidden = true;
+  workspaceExport.hidden = true;
+  workspaceExportDownload.hidden = true;
+  clearWorkspaceStatus();
+  void refreshWorkspace(chapter.novelId, token);
+}
+
 function setNavigationAvailability(chapter) {
   for (const button of reader.querySelectorAll('[data-direction]')) {
     button.disabled = !chapter || (button.dataset.direction === 'previous' ? chapter.previousChapterNumber === null : chapter.nextChapterNumber === null);
@@ -50,6 +177,7 @@ function showReaderMessage(title, message) {
   resetFeedbackForm();
   clearFeedbackStatus();
   reportTranslation.hidden = true;
+  hideWorkspace();
   setNavigationAvailability(null);
 }
 
@@ -103,6 +231,7 @@ function renderChapter(chapter, { focus = false } = {}) {
   translationStatus.textContent = hasTranslation ? '' : 'English translation unavailable. Showing the original Chinese.';
   reportTranslation.hidden = !hasTranslation;
   setNavigationAvailability(chapter);
+  showWorkspace(chapter);
   if (focus) { chapterTitle.focus({ preventScroll: true }); window.scrollTo(0, 0); }
 }
 
@@ -201,7 +330,59 @@ feedbackForm.addEventListener('submit', async (event) => {
     setFeedbackStatus(error.message, { error: true });
   }
 });
-window.addEventListener('keydown', (event) => { if (event.target.matches('input, textarea, select, [contenteditable]')) return; if (event.key === 'ArrowLeft') navigate('previous'); if (event.key === 'ArrowRight') navigate('next'); });
+workspaceForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!currentChapter) return;
+  try {
+    const target = rangeSelection();
+    queueTranslation.disabled = true;
+    clearWorkspaceStatus();
+    await request('/api/v1/jobs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ novelId: currentChapter.novelId, type: 'translate_chapters', target })
+    });
+    setWorkspaceStatus('Translation job saved.');
+    await refreshWorkspace(currentChapter.novelId);
+  } catch (error) {
+    setWorkspaceStatus(error.message, { error: true });
+  } finally {
+    queueTranslation.disabled = false;
+  }
+});
+createEpub.addEventListener('click', async () => {
+  if (!currentChapter) return;
+  try {
+    const selection = rangeSelection();
+    createEpub.disabled = true;
+    clearWorkspaceStatus();
+    await request(`/api/v1/novels/${encodeURIComponent(currentChapter.novelId)}/exports`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ selection })
+    });
+    setWorkspaceStatus('EPUB snapshot saved.');
+    await refreshWorkspace(currentChapter.novelId);
+  } catch (error) {
+    setWorkspaceStatus(error.message, { error: true });
+  } finally {
+    createEpub.disabled = false;
+  }
+});
+workspaceJobControl.addEventListener('click', async () => {
+  if (!currentChapter || !workspaceJobControl.dataset.jobId) return;
+  try {
+    workspaceJobControl.disabled = true;
+    clearWorkspaceStatus();
+    await request(`/api/v1/jobs/${encodeURIComponent(workspaceJobControl.dataset.jobId)}/${workspaceJobControl.dataset.action}?novelId=${encodeURIComponent(currentChapter.novelId)}`, { method: 'POST' });
+    await refreshWorkspace(currentChapter.novelId);
+  } catch (error) {
+    setWorkspaceStatus(error.message, { error: true });
+  } finally {
+    workspaceJobControl.disabled = false;
+  }
+});
+window.addEventListener('keydown', (event) => { if (event.target.matches('input, textarea, select, button, a, [contenteditable]')) return; if (event.key === 'ArrowLeft') navigate('previous'); if (event.key === 'ArrowRight') navigate('next'); });
 window.addEventListener('popstate', async () => { const state = readerState(); if (!state) return showReaderMessage('Choose a novel', 'Select a novel from your shelf to begin reading.'); try { await showChapter(state.novelId, state.chapter, { focus: true }); renderLibrary(); } catch (error) { showReaderMessage('Chapter unavailable', error.message); } });
 
 try { await refreshLibrary(); const state = readerState(); if (state) await showChapter(state.novelId, state.chapter); } catch (error) { libraryStatus.textContent = error.message; }

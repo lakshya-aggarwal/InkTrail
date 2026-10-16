@@ -15,8 +15,8 @@ function defaultScheduler() {
   };
 }
 
-function retryAt(clock) {
-  return new Date(clock().getTime() + RETRY_DELAY_MS).toISOString();
+function retryAt(clock, retryDelayMs) {
+  return new Date(clock().getTime() + retryDelayMs).toISOString();
 }
 
 function errorDetails(error) {
@@ -29,8 +29,9 @@ function errorDetails(error) {
   };
 }
 
-export function createTranslationJobRunner({ jobs, translationService, epubBuilder = null, clock = () => new Date(), scheduler = defaultScheduler(), concurrency = 2 }) {
+export function createTranslationJobRunner({ jobs, translationService, epubBuilder = null, clock = () => new Date(), scheduler = defaultScheduler(), concurrency = 2, retryDelayMs = RETRY_DELAY_MS }) {
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new TypeError('concurrency must be a positive integer');
+  if (!Number.isSafeInteger(retryDelayMs) || retryDelayMs < 0) throw new TypeError('retryDelayMs must be a non-negative integer');
   let started = false;
   let stopping = false;
   let pumping = false;
@@ -157,7 +158,7 @@ export function createTranslationJobRunner({ jobs, translationService, epubBuild
             throw finishError;
           }
           if (retryable && !exhausted) {
-            const nextRunAt = retryAt(clock);
+            const nextRunAt = retryAt(clock, retryDelayMs);
             jobs.transitionJob({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken, toState: 'retrying', currentChapterId: prepared.chapterId, nextRunAt, errorCode: details.code, errorMessage: details.message });
             scheduleWake(nextRunAt);
             return;

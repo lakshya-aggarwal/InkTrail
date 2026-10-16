@@ -40,7 +40,7 @@ async function serveBrowserAsset(request, response) {
   return true;
 }
 
-export async function createApp({ databasePath, exportRoot = join(dirname(databasePath), 'exports'), fetch = globalThis.fetch, translationProvider = createOllamaTranslationProvider({ fetch }), writeEpubArchive: archiveWriter = writeEpubArchive }) {
+export async function createApp({ databasePath, exportRoot = join(dirname(databasePath), 'exports'), fetch = globalThis.fetch, translationProvider = createOllamaTranslationProvider({ fetch }), writeEpubArchive: archiveWriter = writeEpubArchive, runnerOptions = {} }) {
   const database = openDatabase({ databasePath });
   try {
     migrate(database);
@@ -79,7 +79,8 @@ export async function createApp({ databasePath, exportRoot = join(dirname(databa
     jobs: repositories.jobs,
     translationService,
     epubBuilder,
-    clock
+    clock,
+    ...runnerOptions
   });
   await runner.start();
   const router = createRouter({
