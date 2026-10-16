@@ -32,20 +32,33 @@ function errorDetails(error) {
 export function createTranslationJobRunner({ jobs, translationService, epubBuilder = null, clock = () => new Date(), scheduler = defaultScheduler(), concurrency = 2 }) {
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new TypeError('concurrency must be a positive integer');
   let started = false;
+  let stopping = false;
   let pumping = false;
   let wakePending = false;
   let active = 0;
   const activeProcesses = new Map();
+  const activeWork = new Set();
   let timer = null;
 
   function scheduleWake(at) {
-    if (!started || !at) return;
+    if (!started || stopping || !at) return;
     const delay = Math.max(0, new Date(at).getTime() - clock().getTime());
     if (timer !== null) scheduler.cancel(timer);
     timer = scheduler.schedule(delay, () => {
       timer = null;
       void wake();
     });
+  }
+
+  function recoverStaleClaims() {
+    const recovered = jobs.recoverStaleTranslationClaims({
+      claimedBefore: new Date(clock().getTime() - TRANSLATION_JOB_LEASE_MS).toISOString()
+    });
+    if (epubBuilder) {
+      for (const job of recovered) {
+        if (job.type === 'build_epub') epubBuilder.reset({ novelId: job.novelId, exportId: job.target.exportId });
+      }
+    }
   }
 
   async function process(job) {
@@ -69,11 +82,12 @@ export function createTranslationJobRunner({ jobs, translationService, epubBuild
     try {
       leaseTimer = scheduler.schedule(TRANSLATION_JOB_LEASE_MS / 2, renewLease);
       if (job.type === 'build_epub') {
-        const attempt = jobs.startAttempt({ novelId: job.novelId, jobId: job.id });
+        const attempt = jobs.startAttempt({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken });
         try {
           await epubBuilder.build({
             novelId: job.novelId,
             exportId: job.target.exportId,
+            claim: { jobId: job.id, claimToken: job.claimToken },
             shouldContinue: () => {
               const current = jobs.getJob({ novelId: job.novelId, jobId: job.id });
               return current.state === 'running' && current.claimToken === job.claimToken;
@@ -160,21 +174,27 @@ export function createTranslationJobRunner({ jobs, translationService, epubBuild
   }
 
   async function wake() {
-    if (!started) return;
+    if (!started || stopping) return;
     if (pumping) {
       wakePending = true;
       return;
     }
     pumping = true;
     try {
+      recoverStaleClaims();
       jobs.releaseDueTranslationRetries();
-      while (started && active < concurrency) {
+      while (started && !stopping && active < concurrency) {
         const job = jobs.claimNextRunnable({ claimToken: crypto.randomUUID(), type: epubBuilder ? null : 'translate_chapters' });
         if (!job) break;
         active += 1;
-        void process(job);
+        const work = process(job);
+        activeWork.add(work);
+        void work.catch(() => {}).finally(() => activeWork.delete(work));
       }
-      scheduleWake(jobs.nextTranslationRetryAt());
+      const retryAt = jobs.nextTranslationRetryAt();
+      const claimedAt = jobs.nextRunningClaimAt();
+      const claimExpiryAt = claimedAt === null ? null : new Date(new Date(claimedAt).getTime() + TRANSLATION_JOB_LEASE_MS).toISOString();
+      scheduleWake([retryAt, claimExpiryAt].filter(Boolean).sort()[0] ?? null);
     } finally {
       pumping = false;
       if (wakePending) {
@@ -188,22 +208,17 @@ export function createTranslationJobRunner({ jobs, translationService, epubBuild
     async start() {
       if (started) return;
       started = true;
-      const recovered = jobs.recoverStaleTranslationClaims({
-        claimedBefore: new Date(clock().getTime() - TRANSLATION_JOB_LEASE_MS).toISOString()
-      });
-      if (epubBuilder) {
-        for (const job of recovered) {
-          if (job.type === 'build_epub') epubBuilder.reset({ novelId: job.novelId, exportId: job.target.exportId });
-        }
-      }
+      stopping = false;
       await wake();
     },
 
-    stop() {
-      started = false;
+    async stop() {
+      stopping = true;
       wakePending = false;
       if (timer !== null) scheduler.cancel(timer);
       timer = null;
+      await Promise.allSettled([...activeWork]);
+      started = false;
     },
 
     async wake() {

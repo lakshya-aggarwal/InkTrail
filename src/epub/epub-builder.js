@@ -76,14 +76,14 @@ export async function writeEpubArchive({ temporaryFile, snapshot }) {
 }
 
 export function createEpubBuilder({ exports, exportRoot, writeArchive = writeEpubArchive }) {
-  async function build({ novelId, exportId, shouldContinue = () => true }) {
+  async function build({ novelId, exportId, claim = null, shouldContinue = () => true }) {
     const snapshot = validateExportSnapshot(exports.getExportSnapshot({ novelId, exportId }));
     let building = false;
     let temporaryFile = null;
     let published = false;
     try {
       if (!shouldContinue()) throw new ConflictError('EPUB job claim is no longer active');
-      exports.transitionExport({ novelId, exportId, toState: 'building' });
+      exports.transitionExport({ novelId, exportId, toState: 'building', jobClaim: claim });
       building = true;
       temporaryFile = exportRoot.temporaryPath(snapshot.export.fileName);
       await writeArchive({ temporaryFile, snapshot });
@@ -96,7 +96,8 @@ export function createEpubBuilder({ exports, exportRoot, writeArchive = writeEpu
         exportId,
         toState: 'available',
         byteSize: output.byteSize,
-        sha256: output.sha256
+        sha256: output.sha256,
+        jobClaim: claim
       });
       return { export: exportRecord, chapters: snapshot.chapters };
     } catch (error) {
@@ -107,7 +108,8 @@ export function createEpubBuilder({ exports, exportRoot, writeArchive = writeEpu
         exportId,
         toState: 'failed',
         errorCode: 'epub_build_failed',
-        errorMessage: 'EPUB export could not be built.'
+        errorMessage: 'EPUB export could not be built.',
+        jobClaim: claim
       });
       throw error;
     }

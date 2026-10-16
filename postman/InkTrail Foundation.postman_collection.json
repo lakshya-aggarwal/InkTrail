@@ -239,8 +239,37 @@
       "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/exports/{{exportId}}" }
     },
     {
-      "name": "Download EPUB export",
-      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/exports/{{exportId}}/download" }
+      "name": "Download unavailable EPUB export",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/exports/{{exportId}}/download" },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('reports unavailable EPUB before the asynchronous build completes', () => pm.expect(pm.response.code).to.eql(409));"]
+        }
+      }]
+    },
+    {
+      "name": "Poll EPUB export",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/exports/{{exportId}}" },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["const state = pm.response.json().export.state;", "pm.test('returns a valid asynchronous EPUB state', () => pm.expect(['queued', 'building', 'available', 'failed']).to.include(state));", "if (state === 'available') { pm.execution.setNextRequest('Download available EPUB export'); } else if (state === 'failed') { pm.test('EPUB build must not fail', () => pm.expect(state).to.eql('available')); } else { pm.execution.setNextRequest('Poll EPUB export'); }"]
+        }
+      }]
+    },
+    {
+      "name": "Download available EPUB export",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/exports/{{exportId}}/download" },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('downloads only an available EPUB', () => pm.expect(pm.response.code).to.eql(200));", "pm.test('returns an EPUB attachment', () => { pm.expect(pm.response.headers.get('content-type')).to.include('application/epub+zip'); pm.expect(pm.response.headers.get('content-disposition')).to.include('.epub'); });"]
+        }
+      }]
     }
   ]
 }

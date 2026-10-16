@@ -6,6 +6,7 @@ import { migrate } from '../../src/db/migrate.js';
 import { ConflictError, TranslationProviderError } from '../../src/domain/errors.js';
 import { createJobRepository } from '../../src/jobs/job-repository.js';
 import { createTranslationJobRunner, TRANSLATION_JOB_LEASE_MS } from '../../src/jobs/translation-job-runner.js';
+import { createExportRepository } from '../../src/epub/export-repository.js';
 import { createNovelRepository } from '../../src/novels/novel-repository.js';
 import { createSourceRepository } from '../../src/sources/source-repository.js';
 import { createMemoryRepository } from '../../src/memory/memory-repository.js';
@@ -61,7 +62,8 @@ function fixture() {
     sources: createSourceRepository(database, clock.now),
     memory: createMemoryRepository(database, clock.now),
     findings: createQualityFindingRepository(database, clock.now),
-    jobs: createJobRepository(database, clock.now)
+    jobs: createJobRepository(database, clock.now),
+    exports: createExportRepository(database, clock.now)
   };
   return { clock, database, repositories };
 }
@@ -138,6 +140,9 @@ test('startup recovery resets a recovered EPUB snapshot before claiming work', a
       return null;
     },
     nextTranslationRetryAt() {
+      return null;
+    },
+    nextRunningClaimAt() {
       return null;
     }
   };
@@ -383,6 +388,95 @@ test('a second live runner does not reclaim an unexpired claim or duplicate its 
   assert.equal(repositories.jobs.listJobAttempts({ novelId: novel.id, jobId: repositories.jobs.listJobs(novel.id)[0].id }).length, 1);
   first.stop();
   second.stop();
+});
+
+test('reclaims a startup lease at expiry without an unrelated wake', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Lease expiry recovery' });
+  seededChapter(repositories, novel, 1);
+  const job = repositories.jobs.createTranslationJob({ novelId: novel.id, target: { chapterNumbers: [1] }, priority: 0 });
+  repositories.jobs.claimNextRunnable({ claimToken: 'prior-process', type: 'translate_chapters' });
+  clock.advance(10_000);
+  const scheduler = createScheduler(clock);
+  const translationService = createTranslationService(repositories);
+  const runner = createTranslationJobRunner({ jobs: repositories.jobs, translationService, clock: clock.now, scheduler });
+
+  await runner.start();
+  await settle();
+  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).state, 'running');
+  assert.equal(translationService.calls.length, 0);
+
+  await scheduler.advance(TRANSLATION_JOB_LEASE_MS - 10_000 + 1);
+  await settle();
+
+  const recovered = repositories.jobs.getJob({ novelId: novel.id, jobId: job.id });
+  assert.equal(recovered.state, 'completed');
+  assert.equal(translationService.calls.length, 1);
+  await runner.stop();
+});
+
+test('stop drains a claimed translation before relinquishing the runner', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Graceful shutdown' });
+  seededChapter(repositories, novel, 1);
+  const job = repositories.jobs.createTranslationJob({ novelId: novel.id, target: { chapterNumbers: [1] } });
+  let releaseTranslation;
+  const translationService = createTranslationService(repositories, () => new Promise((resolve) => {
+    releaseTranslation = resolve;
+  }));
+  const runner = createRunner({ repositories, clock, translationService });
+
+  await runner.start();
+  await settle();
+  assert.equal(translationService.calls.length, 1);
+
+  let stopped = false;
+  const stopping = runner.stop().then(() => { stopped = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stopped, false);
+  releaseTranslation();
+  await stopping;
+
+  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).state, 'completed');
+});
+
+test('a stale EPUB worker cannot start an attempt under a replacement claim', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'EPUB claim handoff' });
+  const chapter = seededChapter(repositories, novel, 1);
+  repositories.chapters.addTranslationRevision({ chapterId: chapter.id, translatedText: 'Translated chapter.', provider: 'fixture', model: 'fixture' });
+  const snapshot = repositories.exports.captureSnapshot({ novelId: novel.id, selection: { chapterNumbers: [1] } });
+  const job = repositories.jobs.createBuildEpubJob({ novelId: novel.id, target: { exportId: snapshot.export.id } });
+  let handedOff = false;
+  const jobs = {
+    ...repositories.jobs,
+    startAttempt(input) {
+      if (!handedOff) {
+        handedOff = true;
+        repositories.jobs.pauseTranslationJob({ novelId: novel.id, jobId: job.id });
+        repositories.jobs.transitionJob({ novelId: novel.id, jobId: job.id, toState: 'queued' });
+        repositories.jobs.claimNextRunnable({ claimToken: 'replacement-claim', type: 'build_epub' });
+      }
+      return repositories.jobs.startAttempt(input);
+    }
+  };
+  const runner = createTranslationJobRunner({
+    jobs,
+    translationService: { async translateChapter() {} },
+    epubBuilder: { async build() { throw new Error('stale worker reached builder'); }, reset() {} },
+    clock: clock.now,
+    scheduler: createScheduler(clock)
+  });
+
+  await runner.start();
+  await settle();
+
+  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).claimToken, 'replacement-claim');
+  assert.deepEqual(repositories.jobs.listJobAttempts({ novelId: novel.id, jobId: job.id }), []);
+  await runner.stop();
 });
 
 test('retries at exactly fifteen-second intervals and pauses after four failures', async (t) => {

@@ -76,6 +76,8 @@ export function createExportRepository(database, clock) {
   const novelExists = database.prepare('select 1 from novels where id = ?');
   const exportInNovel = database.prepare('select * from epub_exports where id = ? and novel_id = ?');
   const buildJobInNovel = database.prepare("select 1 from jobs where id = ? and novel_id = ? and type = 'build_epub'");
+  const buildJobForExport = database.prepare("select 1 from jobs where id = ? and novel_id = ? and type = 'build_epub' and json_extract(target_json, '$.exportId') = ?");
+  const activeBuildClaim = database.prepare("select 1 from jobs where id = ? and novel_id = ? and type = 'build_epub' and state = 'running' and claim_token = ? and json_extract(target_json, '$.exportId') = ?");
   const insertExport = database.prepare(`
     insert into epub_exports (
       id, novel_id, job_id, state, selection_json, snapshot_at, file_name, byte_size,
@@ -96,6 +98,10 @@ export function createExportRepository(database, clock) {
       last_error_code = @lastErrorCode, last_error_message = @lastErrorMessage,
       updated_at = @updatedAt, completed_at = @completedAt
     where id = @id and novel_id = @novelId and state = @fromState
+  `);
+  const attachExportJob = database.prepare(`
+    update epub_exports set job_id = ?, updated_at = ?
+    where id = ? and novel_id = ? and job_id is null
   `);
   const snapshots = database.prepare(`
     select epub_export_chapters.*, translation_revisions.translated_text
@@ -145,14 +151,13 @@ export function createExportRepository(database, clock) {
     return rows;
   }
 
-  return {
-    captureSnapshot(input) {
+  function captureSnapshot(input, transaction = withinTransaction) {
       const { novelId, selection, jobId = null } = requireObject(input);
       const id = requireNovel(novelId);
       const normalized = canonicalizeChapterTarget(selection);
       const normalizedJobId = jobId === null || jobId === undefined ? null : requireId(jobId, 'jobId');
       if (normalizedJobId && !buildJobInNovel.get(normalizedJobId, id)) throw new ConflictError('EPUB job does not belong to novel');
-      return withinTransaction(() => {
+      return transaction(() => {
         const rows = selectedRows(id, normalized);
         const now = clock().toISOString();
         const exportId = randomUUID();
@@ -182,6 +187,30 @@ export function createExportRepository(database, clock) {
           chapters: snapshots.all(exportId).map(toExportChapter)
         };
       });
+  }
+
+  return {
+    captureSnapshot(input) {
+      return captureSnapshot(input);
+    },
+
+    captureSnapshotInTransaction(input) {
+      return captureSnapshot(input, (action) => action());
+    },
+
+    attachBuildJobInTransaction(input) {
+      const { novelId, exportId, jobId } = requireObject(input);
+      const id = requireNovel(novelId);
+      const normalizedExportId = requireId(exportId, 'exportId');
+      const normalizedJobId = requireId(jobId, 'jobId');
+      const existing = exportInNovel.get(normalizedExportId, id);
+      if (!existing) throw new NotFoundError('EPUB export not found');
+      if (!buildJobForExport.get(normalizedJobId, id, normalizedExportId)) throw new ConflictError('EPUB job does not match export');
+      if (existing.job_id !== null && existing.job_id !== normalizedJobId) throw new ConflictError('EPUB export is already linked to a different job');
+      if (existing.job_id === null && attachExportJob.run(normalizedJobId, clock().toISOString(), normalizedExportId, id).changes === 0) {
+        throw new ConflictError('EPUB export job link is stale');
+      }
+      return toExport(exportInNovel.get(normalizedExportId, id));
     },
 
     getExportSnapshot(input) {
@@ -197,12 +226,18 @@ export function createExportRepository(database, clock) {
     },
 
     transitionExport(input) {
-      const { novelId, exportId, toState, byteSize = null, sha256 = null, fileName = null, errorCode = null, errorMessage = null } = requireObject(input);
+      const { novelId, exportId, toState, byteSize = null, sha256 = null, fileName = null, errorCode = null, errorMessage = null, jobClaim = null } = requireObject(input);
       const id = requireNovel(novelId);
       if (!exportStates.has(toState)) throw new ValidationError('EPUB export state is invalid');
       return withinTransaction(() => {
         const existing = exportInNovel.get(requireId(exportId, 'exportId'), id);
         if (!existing) throw new NotFoundError('EPUB export not found');
+        if (jobClaim !== null) {
+          const claim = requireObject(jobClaim, 'jobClaim');
+          if (!activeBuildClaim.get(requireId(claim.jobId, 'jobClaim.jobId'), id, requireId(claim.claimToken, 'jobClaim.claimToken'), existing.id)) {
+            throw new ConflictError('EPUB job claim is no longer active');
+          }
+        }
         if (!exportTransitions[existing.state].has(toState)) throw new ConflictError('EPUB export state transition is not allowed');
         if (fileName !== null && fileName !== generatedFileName(existing.id)) throw new ValidationError('fileName must be the generated export name');
         if (toState === 'available' && (byteSize === null || sha256 === null)) throw new ValidationError('available EPUB export requires byteSize and sha256');

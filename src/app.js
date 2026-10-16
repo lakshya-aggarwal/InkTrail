@@ -86,7 +86,7 @@ export async function createApp({ databasePath, exportRoot = join(dirname(databa
     libraryService: createLibraryService(repositories, sourceImportService),
     translationService,
     feedbackVerificationService: createFeedbackVerificationService({ database, repositories }),
-    jobService: createJobService({ jobs: repositories.jobs, exports: repositories.exports, runner }),
+    jobService: createJobService({ database, jobs: repositories.jobs, exports: repositories.exports, runner }),
     epubBuilder,
     repositories
   });
@@ -94,21 +94,26 @@ export async function createApp({ databasePath, exportRoot = join(dirname(databa
     if (await serveBrowserAsset(request, response)) return;
     await router(request, response);
   });
+  let closePromise = null;
 
   return {
     server,
     sourceImportService,
     runner,
-    close: () => new Promise((resolve, reject) => {
-      runner.stop();
-      server.close((error) => {
-        database.close();
-        if (error) {
-          reject(error);
-          return;
+    close: () => {
+      if (closePromise !== null) return closePromise;
+      closePromise = (async () => {
+        let serverError = null;
+        try {
+          await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+        } catch (error) {
+          serverError = error;
         }
-        resolve();
-      });
-    })
+        await runner.stop();
+        database.close();
+        if (serverError) throw serverError;
+      })();
+      return closePromise;
+    }
   };
 }

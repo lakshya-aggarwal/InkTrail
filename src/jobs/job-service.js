@@ -14,7 +14,7 @@ function active(job) {
   return ['queued', 'running', 'retrying'].includes(job.state);
 }
 
-export function createJobService({ jobs, exports, runner }) {
+export function createJobService({ database, jobs, exports, runner }) {
   function jobResource(job) {
     const { targetHash, idempotencyKey, claimToken, claimedAt, ...resource } = job;
     return { ...resource, attemptCount: jobs.listJobAttempts({ novelId: job.novelId, jobId: job.id }).length };
@@ -57,12 +57,25 @@ export function createJobService({ jobs, exports, runner }) {
     async createEpubExport({ novelId, selection }, idempotencyKey = null) {
       requireObject({ novelId, selection });
       canonicalizeChapterTarget(selection);
-      const existing = existingEpubJob(novelId, selection, idempotencyKey);
-      if (existing) return { ...existing, created: false };
-      const snapshot = exports.captureSnapshot({ novelId, selection });
-      const job = jobs.createBuildEpubJob({ novelId, target: { exportId: snapshot.export.id }, idempotencyKey });
-      await runner.wake();
-      return { export: snapshot.export, job: jobResource(job), created: true };
+      database.exec('begin immediate');
+      let result;
+      try {
+        const existing = existingEpubJob(novelId, selection, idempotencyKey);
+        if (existing) {
+          result = { ...existing, created: false };
+        } else {
+          const snapshot = exports.captureSnapshotInTransaction({ novelId, selection });
+          const job = jobs.createBuildEpubJobInTransaction({ novelId, target: { exportId: snapshot.export.id }, idempotencyKey });
+          const exportRecord = exports.attachBuildJobInTransaction({ novelId, exportId: snapshot.export.id, jobId: job.id });
+          result = { export: exportRecord, job: jobResource(job), created: true };
+        }
+        database.exec('commit');
+      } catch (error) {
+        database.exec('rollback');
+        throw error;
+      }
+      if (result.created) await runner.wake();
+      return result;
     },
 
     getJobDetail({ novelId, jobId }) {

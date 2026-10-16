@@ -121,6 +121,50 @@ test('paused queued jobs resume through durable controls', async () => {
   assert.equal(['queued', 'running', 'completed'].includes(detail.body.job.state), true);
 });
 
+test('application shutdown waits for an active translation before closing SQLite', async () => {
+  await app.close();
+  let releaseTranslation;
+  let calls = 0;
+  const translationGate = new Promise((resolve) => {
+    releaseTranslation = resolve;
+  });
+  app = await startTestApp({
+    fetch: fixtureFetch,
+    translationProvider: {
+      provider: 'fixture',
+      model: 'fixture-model',
+      async translate() {
+        calls += 1;
+        await translationGate;
+        return { paragraphs: ['Translated chapter.'] };
+      }
+    }
+  });
+  const novel = await createSourcedNovel('Shutdown Trail');
+  await requestJson('POST', '/api/v1/jobs', {
+    novelId: novel.id,
+    type: 'translate_chapters',
+    target: { chapterNumbers: [1] }
+  });
+  for (let attempt = 0; attempt < 20 && calls === 0; attempt += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1);
+
+  const unhandled = [];
+  const onUnhandled = (error) => unhandled.push(error);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    let closed = false;
+    const closing = app.close().then(() => { closed = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(closed, false);
+    releaseTranslation();
+    await closing;
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+  assert.deepEqual(unhandled, []);
+});
+
 test('EPUB routes snapshot revisions, report unavailable work, and serve verified downloads', async () => {
   await app.close();
   let releaseArchive;
@@ -142,7 +186,7 @@ test('EPUB routes snapshot revisions, report unavailable work, and serve verifie
     selection: { chapterNumbers: [1] }
   }, { 'Idempotency-Key': 'export-one' });
   assert.equal(created.status, 201);
-  assert.equal(created.body.export.jobId, null);
+  assert.equal(created.body.export.jobId, created.body.job.id);
   await waitForExportState(novel.id, created.body.export.id, 'building');
   const unavailable = await requestJson('GET', `/api/v1/novels/${novel.id}/exports/${created.body.export.id}/download`);
   assert.deepEqual(unavailable, {

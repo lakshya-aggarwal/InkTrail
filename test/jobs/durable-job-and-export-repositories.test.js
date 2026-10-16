@@ -6,6 +6,7 @@ import { migrate } from '../../src/db/migrate.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../src/domain/errors.js';
 import { createExportRepository } from '../../src/epub/export-repository.js';
 import { createJobRepository } from '../../src/jobs/job-repository.js';
+import { createJobService } from '../../src/jobs/job-service.js';
 import { createNovelRepository } from '../../src/novels/novel-repository.js';
 import { createSourceRepository } from '../../src/sources/source-repository.js';
 
@@ -79,12 +80,12 @@ test('translation jobs canonicalize targets, isolate novels, and enforce lifecyc
   assert.equal(claimed.id, first.id);
   const second = repositories.jobs.createTranslationJob({ novelId: secondNovel.id, target: { chapterNumbers: [1] } });
   assert.notEqual(second.id, first.id);
-  assert.throws(() => repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: first.id, chapterId: otherChapter.id }), NotFoundError);
-  assert.throws(() => repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: first.id, chapterId: unsourcedChapter.id }), ConflictError);
-  const attempt = repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: first.id, chapterId: firstChapter.id });
+  assert.throws(() => repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: first.id, chapterId: otherChapter.id, claimToken: claimed.claimToken }), NotFoundError);
+  assert.throws(() => repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: first.id, chapterId: unsourcedChapter.id, claimToken: claimed.claimToken }), ConflictError);
+  const attempt = repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: first.id, chapterId: firstChapter.id, claimToken: claimed.claimToken });
   assert.equal(attempt.attemptNumber, 1);
   assert.equal(repositories.jobs.finishAttempt({ jobId: first.id, attemptId: attempt.id, claimToken: claimed.claimToken, state: 'retryable_failed', errorCode: 'temporary', errorMessage: 'Try again.' }).state, 'retryable_failed');
-  const retry = repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: first.id, chapterId: firstChapter.id });
+  const retry = repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: first.id, chapterId: firstChapter.id, claimToken: claimed.claimToken });
   assert.equal(retry.attemptNumber, 2);
   assert.equal(repositories.jobs.finishAttempt({ jobId: first.id, attemptId: retry.id, claimToken: claimed.claimToken, state: 'succeeded' }).state, 'succeeded');
   assert.equal(repositories.jobs.transitionJob({ novelId: firstNovel.id, jobId: first.id, toState: 'paused' }).state, 'paused');
@@ -108,8 +109,8 @@ test('job checkpoints, targets, and claims reject stale or foreign work', (t) =>
     insert into job_attempts (id, job_id, novel_id, chapter_id, attempt_number, state, started_at, claim_token)
     values ('outside-range', ?, ?, ?, 1, 'started', '2026-10-14T00:00:00.000Z', ?)
   `).run(rangeJob.id, firstNovel.id, secondChapter.id, claimedRange.claimToken), /job attempt must match its job target/);
-  assert.throws(() => repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: rangeJob.id, chapterId: secondChapter.id }), ConflictError);
-  const attempt = repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: rangeJob.id, chapterId: firstChapter.id });
+  assert.throws(() => repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: rangeJob.id, chapterId: secondChapter.id, claimToken: claimedRange.claimToken }), ConflictError);
+  const attempt = repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: rangeJob.id, chapterId: firstChapter.id, claimToken: claimedRange.claimToken });
   repositories.jobs.transitionJob({ novelId: firstNovel.id, jobId: rangeJob.id, toState: 'paused' });
   assert.throws(() => repositories.jobs.finishAttempt({ jobId: rangeJob.id, attemptId: attempt.id, claimToken: claimedRange.claimToken, state: 'succeeded' }), ConflictError);
   assert.throws(() => repositories.database.prepare("update job_attempts set state = 'succeeded', finished_at = ? where id = ?").run('2026-10-14T00:00:00.000Z', attempt.id), /only the active job claim may finalize/);
@@ -117,7 +118,7 @@ test('job checkpoints, targets, and claims reject stale or foreign work', (t) =>
   const explicitJob = repositories.jobs.createTranslationJob({ novelId: firstNovel.id, target: { chapterNumbers: [2] } });
   const claimedExplicit = repositories.jobs.claimNextRunnable({ claimToken: 'explicit-claim' });
   assert.equal(claimedExplicit.id, explicitJob.id);
-  assert.throws(() => repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: explicitJob.id, chapterId: firstChapter.id }), ConflictError);
+  assert.throws(() => repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: explicitJob.id, chapterId: firstChapter.id, claimToken: claimedExplicit.claimToken }), ConflictError);
 });
 
 test('build EPUB jobs require an existing export owned by their novel', (t) => {
@@ -136,7 +137,7 @@ test('build EPUB jobs require an existing export owned by their novel', (t) => {
   const job = repositories.jobs.createBuildEpubJob({ novelId: firstNovel.id, target: { exportId: firstExport.id } });
   const claimed = repositories.jobs.claimNextRunnable({ claimToken: 'epub-claim' });
   assert.equal(claimed.id, job.id);
-  const attempt = repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: job.id });
+  const attempt = repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: job.id, claimToken: claimed.claimToken });
   assert.equal(repositories.jobs.finishAttempt({ jobId: job.id, attemptId: attempt.id, claimToken: claimed.claimToken, state: 'succeeded' }).state, 'succeeded');
 });
 
@@ -168,4 +169,38 @@ test('EPUB metadata only accepts generated safe output names', (t) => {
     sha256: 'a'.repeat(64)
   });
   assert.equal(available.state, 'available');
+});
+
+test('EPUB snapshot and build job commit together and deduplicate inside the transaction', async (t) => {
+  const repositories = fixture();
+  t.after(() => repositories.database.close());
+  const { firstNovel } = seed(repositories);
+  const runner = { async wake() {} };
+  const failingJobs = {
+    ...repositories.jobs,
+    createBuildEpubJobInTransaction() {
+      throw new Error('simulated job write failure');
+    }
+  };
+  const failingService = createJobService({ database: repositories.database, jobs: failingJobs, exports: repositories.exports, runner });
+
+  await assert.rejects(
+    failingService.createEpubExport({ novelId: firstNovel.id, selection: { chapterNumbers: [1] } }),
+    /simulated job write failure/
+  );
+  assert.equal(repositories.database.prepare('select count(*) as count from epub_exports').get().count, 0);
+
+  const firstService = createJobService({ database: repositories.database, jobs: repositories.jobs, exports: repositories.exports, runner });
+  const secondService = createJobService({ database: repositories.database, jobs: repositories.jobs, exports: repositories.exports, runner });
+  const [first, second] = await Promise.all([
+    firstService.createEpubExport({ novelId: firstNovel.id, selection: { chapterNumbers: [1] } }),
+    secondService.createEpubExport({ novelId: firstNovel.id, selection: { chapterNumbers: [1] } })
+  ]);
+
+  assert.equal(first.created || second.created, true);
+  assert.equal(first.created && second.created, false);
+  assert.equal(first.export.id, second.export.id);
+  assert.equal(first.export.jobId, first.job.id);
+  assert.equal(repositories.database.prepare('select count(*) as count from epub_exports').get().count, 1);
+  assert.equal(repositories.database.prepare("select count(*) as count from jobs where type = 'build_epub'").get().count, 1);
 });
