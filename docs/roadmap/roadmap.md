@@ -38,8 +38,11 @@ import, progress, pause/resume, and stale-navigation-safe controls. See [ADR
 
 Evidence-backed NovelPing source resolution. A reader will submit one canonical
 NovelPing chapter URL, and InkTrail will propose a Chinese source catalog only
-after persisted title, author, chapter-number, and catalog evidence passes a
-deterministic threshold. Import stays explicit. See [ADR
+after exact chapter-number, declared novel-title alias, and declared
+chapter-title alias evidence passes the fixed `novelping-kujiang-v1` rule.
+The first implementation queries Kujiang only, and import stays explicit. A
+NovelPing chapter that needs another Chinese source remains unresolved until
+that source receives its own reviewed adapter boundary. See [ADR
 0006](../decisions/0006-evidence-backed-novelping-source-resolution.md) and the
 [implementation plan](../superpowers/plans/2026-10-17-inktrail-novelping-source-resolution.md).
 

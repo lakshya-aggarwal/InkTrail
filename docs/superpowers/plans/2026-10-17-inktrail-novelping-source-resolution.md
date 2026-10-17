@@ -27,28 +27,39 @@ catalog-import job after resolution. No source content is imported by resolving.
    title, optional normalized author, positive chapter number, normalized
    chapter title, extractor version, and evidence hash. Never persist the
    translated chapter body for this workflow.
-3. Query registered catalog-discovery adapters with a normalized novel query.
-   Each adapter returns bounded candidate source identity, metadata, catalog
-   snapshot, and the candidate entry for the exact chapter number. The first
-   non-Kujiang adapter must be a separate named adapter with its own URL policy,
-   parser, fixtures, and registry entry - no generic provider implementation.
-4. Score independent evidence deterministically. Require exact chapter-number
-   equality and a chapter-title match after case/punctuation folding plus either
-   an adapter-declared alias or deterministic Chinese romanization. Novel title
-   and author strengthen confidence when comparable and fail only on a
-   definitive alias-based conflict. Do not infer cross-language meaning with
-   machine translation. Persist component scores and matched normalized values,
-   not opaque model output. Accept only a unique top candidate at or above the
-   threshold; ties, collisions, and incomplete evidence fail closed.
-5. After acceptance, atomically bind the source identity and immutable catalog
+3. Query only the existing Kujiang catalog adapter with a normalized novel
+   query. It returns bounded, unpersisted candidate identities, declared
+   aliases, catalog metadata, full catalog entries, and the entry for the exact
+   chapter number. It does not call a repository or create a `novel_sources`
+   row. A second source site is explicitly deferred to a separately reviewed
+   adapter plan - the user's example may remain unresolved until that adapter
+   exists.
+4. Score every candidate with this exact fixed rule. Normalize every comparable
+   text value with NFKC, Unicode case-folding, whitespace collapse, and
+   punctuation removal. A candidate is immediately rejected unless: (a) its
+   chapter number equals the NovelPing positive chapter number (40 points),
+   (b) its source-novel title equals the NovelPing title directly or through an
+   adapter-declared alias for that source identity (30 points), and (c) its
+   chapter title equals the NovelPing title directly or through an
+   adapter-declared alias for that catalog entry (25 points). Author agreement
+   is confidence-only: add five points when both comparable normalized aliases
+   agree, add zero when either author is absent or not comparable, and reject
+   when comparable aliases disagree. The fixed acceptance threshold is 95 on a
+   100-point scale. The top eligible candidate is accepted only when its score
+   exceeds every other eligible candidate by at least five points. Persist each
+   component's normalized values, boolean match, score, and reject reason -
+   never opaque model output. No machine translation, fuzzy matching, or
+   romanization is used in the first implementation.
+5. Hold full candidate catalog payloads in memory while scoring. After a single
+   winner passes, atomically bind the source identity and immutable catalog
    snapshot to the novel if ownership permits. The UI exposes an explicit
    "Import source chapters" action that creates the existing job. A rejected or
    unresolved attempt creates no source ownership and no job.
 
-The initial matching configuration is versioned and code-owned: exact chapter
-number, normalized source title, and a unique score margin are required. Do not
-introduce user-tunable thresholds or fuzzy search until fixture evidence shows a
-concrete need.
+The acceptance rule is versioned and code-owned as `novelping-kujiang-v1`.
+There are no user-tunable thresholds, generic provider fallback, fuzzy search,
+machine translation, or romanization. Any later comparison strategy requires
+new fixtures and a separately reviewed decision.
 
 ## Data Model And Migration
 
@@ -60,9 +71,11 @@ Add one migration with these novel-scoped, append-only records:
   Deduplicate an equivalent successful or unresolved request by canonical URL,
   evidence hash, and resolver version.
 - `source_resolution_candidates`: candidate ID, attempt ID, adapter/site,
-  canonical source identity, catalog ID nullable until accepted, normalized
-  metadata and declared aliases, exact candidate catalog-entry identity,
-  component scores, total score, rank, and decision reason. Require
+  canonical source identity, content hash, normalized metadata and declared
+  aliases, exact candidate entry ordinal/external identity, component scores,
+  total score, rank, decision reason, and nullable catalog ID. `catalog_id` is
+  null for every rejected/unresolved attempt. Store no complete candidate entry
+  list here; it remains an in-memory provider payload until acceptance. Require
   candidate/attempt novel ownership.
 - `novel_source_resolutions`: accepted resolution ID, novel ID, NovelPing URL,
   attempt ID, novel source ID, catalog ID, catalog entry ID, resolver version,
@@ -73,8 +86,31 @@ Add one migration with these novel-scoped, append-only records:
 Migration validation must reject malformed state, cross-novel references,
 missing required accepted references, duplicate active ownership, checkpoint
 conflicts, or preexisting rows incompatible with the new constraints before
-recording its version. Repositories expose only the requesting novel's rows and
-never update past attempt evidence.
+recording its version. Existing `novel_sources` already enforces global
+`(site, normalized_url)` ownership and catalog snapshots require the matching
+novel source. Repositories expose only the requesting novel's rows and never
+update past attempt evidence.
+
+### Atomic Acceptance And Collision Sequence
+
+1. Extract NovelPing evidence, then check for an existing terminal attempt with
+   the same canonical URL, evidence hash, and resolver version. Return that
+   attempt unchanged on an idempotent replay.
+2. Fetch and score unpersisted Kujiang candidates outside the database
+   transaction. A no-match, failed threshold, tie, or author conflict writes
+   only an immutable unresolved attempt and sanitized candidate observations.
+3. For a passing winner, start `BEGIN IMMEDIATE`, re-check the idempotency key,
+   source identity, and any current accepted resolution for the novel. A source
+   already owned by a different novel or a different accepted source already
+   owned by this novel produces an immutable conflict attempt and no source or
+   snapshot mutation.
+4. Create or reuse the matching `novel_sources` row, then call existing
+   `createOrGetSnapshotInTransaction` with the candidate's content hash and
+   ordered entries. Its trigger and unique constraints enforce source/catalog
+   ownership and immutable snapshot idempotency.
+5. Insert the accepted resolution with the returned catalog and entry IDs, then
+   commit. Any constraint, source, catalog, or resolution error rolls back the
+   complete accepted path. No rejected path can leave a source or snapshot.
 
 ## Adapter And Service Design
 
@@ -83,13 +119,14 @@ never update past attempt evidence.
    5-second, 1 MB, HTML-only, HTTPS-host allowlist policy. Map timeout,
    upstream status, malformed HTML, and body limit to typed retryable source
    errors; never return upstream text to clients.
-2. Extend the adapter registry with a narrow catalog-candidate operation rather
-   than overloading chapter import. It accepts normalized novel evidence and a
-   requested chapter number, returning candidate metadata, declared aliases,
-   and an immutable catalog snapshot candidate.
-3. Extract shared catalog identity persistence behind the existing catalog
-   service. A provider may propose a snapshot but cannot replace a novel's
-   accepted source or import content.
+2. Extend the Kujiang adapter with a narrow in-memory catalog-candidate
+   operation rather than overloading chapter import. It accepts normalized
+   novel evidence and a requested chapter number, returning candidate metadata,
+   declared aliases, and a complete catalog payload without persistence.
+3. Extract shared accepted-catalog persistence behind the existing catalog
+   service. It is callable only inside the resolution transaction after the
+   evidence gate passes. A provider may propose a payload but cannot replace a
+   novel's accepted source or import content.
 4. Implement `SourceResolutionService.resolveNovelPingChapter({ novelId,
    novelPingUrl })`: validate novel and URL, fetch/extract, call enabled
    adapters under per-provider bounds, normalize/score, persist the full
@@ -152,10 +189,27 @@ resolution_unverified`; unexpected failures `500 internal_error`. Document
 - NovelPing fixtures: canonical page, title/author variants, valid chapter
   2491 evidence, malformed/missing metadata, redirect rejection, content-type,
   timeout, body limit, and markup noise.
-- Provider fixtures: Kujiang match, first non-Kujiang adapter match, no match,
-  title collision, author conflict, exact-number mismatch, equal top score,
-  cap/timeout, and ownership collision. Fixture data includes the documented
-  Return of the War God/战神狂飙 chapter-2491 alignment only as test evidence.
+- Provider fixtures: Kujiang match, no match, title collision, author conflict,
+  exact-number mismatch, threshold boundary, score-margin boundary, cap/timeout,
+  and ownership collision. Fixture data includes the documented Return of the
+  War God/战神狂飙 chapter-2491 alignment only as test evidence.
+- Acceptance matrix, fixed for `novelping-kujiang-v1`:
+
+  | Fixture | Number | Novel title alias | Chapter title alias | Author | Score | Expected decision |
+  | --- | ---: | ---: | ---: | --- | ---: | --- |
+  | `accept-95-no-author` | exact | match | match | absent | 95 | accept when no other eligible candidate is within 5 points |
+  | `accept-100-author-match` | exact | match | match | match | 100 | accept when runner-up is 95 or lower |
+  | `reject-number-mismatch` | mismatch | match | match | absent | - | reject: mandatory chapter number |
+  | `reject-novel-title-missing` | exact | absent | match | absent | - | reject: mandatory novel title |
+  | `reject-chapter-title-missing` | exact | match | absent | absent | - | reject: mandatory chapter title |
+  | `reject-author-conflict` | exact | match | match | conflict | - | reject: comparable author conflict |
+  | `reject-score-tie-95` | exact | match | match | absent | 95/95 | reject: no unique winner |
+  | `reject-margin-under-5` | exact | match | match | match/absent | 100/96 | impossible under v1 integer weights; assert the scorer never emits it |
+  | `reject-identity-collision` | exact | match | match | absent | 95 | reject: source identity belongs to another novel |
+
+  The scorer must also assert that a candidate cannot reach a score below 95
+  after satisfying mandatory evidence. This guards accidental future changes to
+  the fixed weight model.
 - Migration/repository: clean and upgrade paths, immutability, idempotency,
   foreign-novel isolation, accepted-reference integrity, collision rejection,
   and no source/import side effects from unresolved attempts.
@@ -171,8 +225,8 @@ resolution_unverified`; unexpected failures `500 internal_error`. Document
 
 1. Land migration, repositories, and upgrade/ownership tests.
 2. Land fixture-backed NovelPing extraction plus shared normalization/scoring.
-3. Land Kujiang candidate discovery through the new interface, then one
-   separately fixture-backed non-Kujiang catalog adapter.
+3. Land Kujiang candidate discovery through the new in-memory interface only.
+   Do not add another source adapter in this plan.
 4. Land atomic resolution service and, only if its bounded work cannot complete
    synchronously, durable dispatch/recovery support.
 5. Land OpenAPI, local Postman examples/assertions, routes, and contract tests.
@@ -188,6 +242,6 @@ resolution_unverified`; unexpected failures `500 internal_error`. Document
 - Replacing current Kujiang importer behavior, changing translation/feedback/
   EPUB semantics, cloud sync, multi-process workers, user accounts, or remote
   shared queues.
-- Machine-learning title matching, user-adjustable scoring, production endpoint
-  assumptions from the example, live provider tests, or a generic adapter plugin
-  framework.
+- Machine-learning title matching, romanization, user-adjustable scoring,
+  production endpoint assumptions from the example, live provider tests, a
+  generic adapter plugin framework, or any adapter beyond Kujiang.
