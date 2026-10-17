@@ -120,3 +120,21 @@ test('source import jobs use catalog targets, preserve idempotency, and update c
   assert.equal(listed.body.items[0].importedEntryCount, 3);
   assert.equal(chapter.body.translationRevisionId, null);
 });
+
+test('source import jobs reject undocumented top-level fields before creating work', async () => {
+  const novel = await requestJson('POST', '/api/v1/novels', { title: 'Strict Import Trail' });
+  const catalog = await requestJson('POST', `/api/v1/novels/${novel.body.id}/source-catalogs`, { bookUrl });
+  const rejected = await requestJson('POST', '/api/v1/jobs', {
+    novelId: novel.body.id,
+    type: 'source_import_catalog',
+    target: { catalogId: catalog.body.id },
+    unexpected: true
+  });
+  const jobs = await requestJson('GET', `/api/v1/jobs?novelId=${novel.body.id}`);
+
+  assert.deepEqual(rejected, {
+    status: 400,
+    body: { error: { code: 'validation_error', message: 'input must contain only novelId, type, and target', retryable: false } }
+  });
+  assert.deepEqual(jobs.body.items, []);
+});

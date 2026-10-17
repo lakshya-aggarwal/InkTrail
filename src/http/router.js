@@ -99,6 +99,13 @@ function sourceCatalogInput(input) {
   return input;
 }
 
+function sourceImportCatalogJobInput(input) {
+  if (Object.keys(input).length !== 3 || !['novelId', 'type', 'target'].every((key) => Object.hasOwn(input, key))) {
+    throw new ValidationError('input must contain only novelId, type, and target');
+  }
+  return input;
+}
+
 function sourceCatalogSummary(catalog) {
   return {
     id: catalog.id,
@@ -165,7 +172,7 @@ export function createRouter({ libraryService, translationService, feedbackVerif
         await handle(response, undefined, async () => {
           const input = await readObject(request);
           const result = input.type === 'source_import_catalog'
-            ? await jobService.createSourceImportCatalogJob(input, idempotencyKey(request))
+            ? await jobService.createSourceImportCatalogJob(sourceImportCatalogJobInput(input), idempotencyKey(request))
             : await jobService.createTranslationJob(input, idempotencyKey(request));
           writeJson(response, result.created ? 201 : 200, result.job);
         });
