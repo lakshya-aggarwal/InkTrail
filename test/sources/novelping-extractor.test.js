@@ -75,8 +75,17 @@ test('maps timeout, content type, body limits, and malformed HTML to safe retrya
     () => timeoutExtractor.fetchEvidence(chapterUrl),
     () => createNovelPingExtractor({ fetch: async () => htmlResponse('', { status: 503 }) }).fetchEvidence(chapterUrl),
     () => createNovelPingExtractor({ fetch: async () => new Response('not html', { headers: { 'content-type': 'text/plain' } }) }).fetchEvidence(chapterUrl),
+    () => createNovelPingExtractor({ fetch: async () => new Response('not html', { headers: { 'content-type': 'application/x-text/html' } }) }).fetchEvidence(chapterUrl),
+    () => createNovelPingExtractor({ fetch: async () => new Response('not html', { headers: { 'content-type': 'text/html; charset' } }) }).fetchEvidence(chapterUrl),
     () => createNovelPingExtractor({ fetch: async () => htmlResponse('x'.repeat(20)), maxBodyBytes: 10 }).fetchEvidence(chapterUrl),
     () => createNovelPingExtractor({ fetch: async () => htmlResponse('<h1 data-chapter-number="2491" data-chapter-title>Title</h1>') }).fetchEvidence(chapterUrl)
   ];
   for (const request of cases) await assert.rejects(request, (error) => error instanceof SourceFetchError && error.retryable === true);
+});
+
+test('accepts text/html with valid parameters', async () => {
+  const extractor = createNovelPingExtractor({
+    fetch: async () => new Response(await chapterHtml(), { headers: { 'content-type': 'TEXT/HTML ; charset="utf-8"; boundary=fixture' } })
+  });
+  assert.equal((await extractor.fetchEvidence(chapterUrl)).chapterNumber, 2491);
 });

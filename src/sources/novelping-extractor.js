@@ -7,6 +7,13 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 3;
+const HTTP_TOKEN = "[!#$%&'*+\\-.^_`|~0-9A-Za-z]+";
+const HTTP_QUOTED_STRING = '"(?:[\\t !#-\\[\\]-~]|\\\\[\\t !-~])*"';
+const HTML_CONTENT_TYPE = new RegExp(`^\\s*text/html\\s*(?:;\\s*${HTTP_TOKEN}\\s*=\\s*(?:${HTTP_TOKEN}|${HTTP_QUOTED_STRING})\\s*)*$`, 'i');
+
+function isHtmlContentType(value) {
+  return typeof value === 'string' && HTML_CONTENT_TYPE.test(value);
+}
 
 function attributesFrom(source) {
   const attributes = {};
@@ -191,7 +198,7 @@ async function fetchHtml(fetchClient, canonicalUrl, timeoutMs, maxBodyBytes) {
         continue;
       }
       if (!response?.ok) throw new SourceFetchError('NovelPing source returned an unsuccessful response');
-      if (!response.headers?.get?.('content-type')?.toLowerCase().includes('text/html')) {
+      if (!isHtmlContentType(response.headers?.get?.('content-type'))) {
         throw new SourceFetchError('NovelPing source returned non-HTML content');
       }
       try {

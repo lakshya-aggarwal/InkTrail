@@ -7,7 +7,10 @@ const candidate = Object.freeze({ id: 'war-god-2491', novelTitle: '战神狂飙'
 
 test('normalizes NFKC, case, whitespace, and punctuation without fuzzy matching', () => {
   assert.equal(normalizeResolutionText('  RETURN\u00a0of - the! War God  '), 'return of the war god');
+  assert.equal(normalizeResolutionText('Straße'), 'strasse');
+  assert.equal(normalizeResolutionText('STRASSE'), 'strasse');
   assert.equal(normalizeResolutionText('Return of the War Gods'), 'return of the war gods');
+  assert.notEqual(normalizeResolutionText('résumé'), normalizeResolutionText('resume'));
 });
 
 test('accepts the 95-point no-author and 100-point author-match matrix cases', () => {

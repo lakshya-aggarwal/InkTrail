@@ -35,9 +35,11 @@ function candidateKey(candidate, index) {
 
 export function normalizeResolutionText(value) {
   if (typeof value !== 'string') return '';
+  // ECMAScript supplies Unicode default casing; sharp S needs its case-fold expansion.
   return value
     .normalize('NFKC')
     .toLowerCase()
+    .replaceAll('ß', 'ss')
     .replace(/[\p{P}]/gu, '')
     .replace(/\s+/gu, ' ')
     .trim();
