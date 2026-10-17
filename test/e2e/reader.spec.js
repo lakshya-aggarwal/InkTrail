@@ -297,3 +297,49 @@ test('workspace downloads an available EPUB while another chapter translates', a
   expect(download.suggestedFilename()).toMatch(/\.epub$/);
   await expect(page.locator('#workspace-job-status')).toHaveText('Translation is completed after 1 attempt.');
 });
+
+test('workspace discovers and controls a source catalog without interrupting reader navigation', async ({ page }, testInfo) => {
+  const bookId = testInfo.project.name === 'desktop-chromium' ? '91' : '92';
+  const chapterId = `${testInfo.workerIndex + 1}911`;
+  const novel = await page.request.post('/api/v1/novels', { data: { title: 'Catalog workspace novel' } });
+  const novelBody = await novel.json();
+  const sourced = await page.request.post(`/api/v1/novels/${novelBody.id}/source-chapters`, {
+    data: { sourceUrl: `https://www.kujiang.com/book/${bookId}/${chapterId}`, chapterNumber: 10 }
+  });
+  expect(sourced.ok(), await sourced.text()).toBeTruthy();
+  const local = await page.request.post(`/api/v1/novels/${novelBody.id}/chapters`, {
+    data: { chapterNumber: 11, title: 'Navigation remains available', originalText: 'Local reader text' }
+  });
+  expect(local.ok(), await local.text()).toBeTruthy();
+  await page.goto(`/?novel=${novelBody.id}&chapter=10`);
+
+  await expect(page.getByLabel('Add Kujiang source')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Import source chapters' })).toBeHidden();
+  await expect(page.request.get(`/api/v1/jobs?novelId=${novelBody.id}`).then((response) => response.json())).resolves.toEqual({ items: [] });
+
+  const discovery = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/source-catalogs'));
+  await page.getByLabel('Add Kujiang source').fill(`https://www.kujiang.com/book/${bookId}`);
+  await page.getByRole('button', { name: 'Discover source' }).click();
+  expect((await discovery).status()).toBe(201);
+  await expect(page.locator('#source-catalog-status')).toHaveText('Kujiang catalog ready: 1 source chapters, 0 imported.');
+  await expect(page.locator('#workspace-status')).toHaveText('Source catalog saved. Import starts only when you choose it.');
+  await expect(page.request.get(`/api/v1/jobs?novelId=${novelBody.id}`).then((response) => response.json())).resolves.toEqual({ items: [] });
+
+  const created = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/jobs');
+  await page.getByRole('button', { name: 'Import source chapters' }).click();
+  expect((await created).postDataJSON()).toMatchObject({ novelId: novelBody.id, type: 'source_import_catalog' });
+  await expect(page.locator('#source-import-job-status')).toContainText('Source import is running after 1 attempt. 0 of 1 imported. Current source chapter 1.');
+  await expect(page.getByRole('button', { name: 'Pause source import' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Pause source import' }).click();
+  await expect(page.getByRole('button', { name: 'Resume source import' })).toBeVisible();
+  await expect(page.locator('#source-import-job-status')).toContainText('Source import is paused');
+  await page.getByRole('button', { name: 'Resume source import' }).click();
+  await expect(page.getByRole('button', { name: 'Pause source import' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('source-workspace.png'), fullPage: true });
+
+  await page.getByRole('button', { name: 'Next chapter' }).last().click();
+  await expect(page.getByRole('heading', { name: 'Navigation remains available' })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`\\?novel=${novelBody.id}&chapter=11$`));
+  await expect(page.locator('#translation-workspace')).toBeHidden();
+});

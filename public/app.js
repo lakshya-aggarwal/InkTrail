@@ -28,11 +28,21 @@ const workspaceJobControl = document.querySelector('#workspace-job-control');
 const workspaceExport = document.querySelector('#workspace-export');
 const workspaceExportStatus = document.querySelector('#workspace-export-status');
 const workspaceExportDownload = document.querySelector('#workspace-export-download');
+const sourceCatalogForm = document.querySelector('#source-catalog-form');
+const sourceBookUrl = document.querySelector('#source-book-url');
+const discoverSourceCatalog = document.querySelector('#discover-source-catalog');
+const sourceCatalog = document.querySelector('#source-catalog');
+const sourceCatalogStatus = document.querySelector('#source-catalog-status');
+const importSourceCatalog = document.querySelector('#import-source-catalog');
+const sourceImportJob = document.querySelector('#source-import-job');
+const sourceImportJobStatus = document.querySelector('#source-import-job-status');
+const sourceImportJobControl = document.querySelector('#source-import-job-control');
 
 let novels = [];
 let currentChapter = null;
 let workspacePoll = null;
 let workspaceToken = 0;
+let workspaceCatalogProgress = null;
 
 const activeStates = new Set(['queued', 'running', 'retrying']);
 
@@ -74,6 +84,9 @@ function hideWorkspace() {
   workspaceJob.hidden = true;
   workspaceExport.hidden = true;
   workspaceExportDownload.hidden = true;
+  sourceCatalog.hidden = true;
+  sourceImportJob.hidden = true;
+  workspaceCatalogProgress = null;
   clearWorkspaceStatus();
 }
 
@@ -117,6 +130,42 @@ function renderWorkspaceExport(exportItem, novelId) {
   if (available) workspaceExportDownload.href = `/api/v1/novels/${encodeURIComponent(novelId)}/exports/${encodeURIComponent(exportItem.id)}/download`;
 }
 
+function renderSourceCatalog(catalog, detail, job) {
+  if (!catalog) {
+    sourceCatalog.hidden = true;
+    return;
+  }
+  sourceCatalog.hidden = false;
+  sourceCatalogStatus.textContent = `Kujiang catalog ready: ${catalog.entryCount} source chapters, ${catalog.importedEntryCount} imported.`;
+  const complete = catalog.importedEntryCount >= catalog.entryCount;
+  importSourceCatalog.disabled = complete;
+  importSourceCatalog.textContent = complete ? 'Source chapters imported' : 'Import source chapters';
+  if (!job) {
+    sourceImportJob.hidden = true;
+    return;
+  }
+  sourceImportJob.hidden = false;
+  const entry = detail?.entries.find((item) => item.id === job.currentCatalogEntryId);
+  const attempts = job.attemptCount === 1 ? '1 attempt' : `${job.attemptCount} attempts`;
+  const current = entry ? ` Current source chapter ${entry.ordinal}.` : '';
+  const reason = job.lastErrorMessage && (job.state === 'retrying' || job.state === 'paused') ? ` ${job.lastErrorMessage}` : '';
+  sourceImportJobStatus.textContent = `Source import is ${job.state} after ${attempts}. ${catalog.importedEntryCount} of ${catalog.entryCount} imported.${current}${reason}`;
+  const controllable = activeStates.has(job.state) || job.state === 'paused';
+  sourceImportJobControl.hidden = !controllable;
+  if (controllable) sourceImportJobControl.textContent = job.state === 'paused' ? 'Resume source import' : 'Pause source import';
+  sourceImportJobControl.dataset.jobId = job.id;
+  sourceImportJobControl.dataset.action = job.state === 'paused' ? 'resume' : 'pause';
+}
+
+async function refreshCurrentChapterNavigation(novelId, token) {
+  const chapter = currentChapter;
+  if (!chapter || !workspaceStillSelected(novelId, token)) return;
+  const refreshed = await request(`/api/v1/novels/${encodeURIComponent(novelId)}/chapters/${chapter.chapterNumber}`);
+  if (!workspaceStillSelected(novelId, token) || currentChapter?.chapterNumber !== chapter.chapterNumber) return;
+  currentChapter = { ...currentChapter, previousChapterNumber: refreshed.previousChapterNumber, nextChapterNumber: refreshed.nextChapterNumber };
+  setNavigationAvailability(currentChapter);
+}
+
 function scheduleWorkspaceRefresh(novelId, token) {
   stopWorkspacePolling();
   workspacePoll = window.setTimeout(() => {
@@ -127,18 +176,29 @@ function scheduleWorkspaceRefresh(novelId, token) {
 
 async function refreshWorkspace(novelId, token = workspaceToken) {
   try {
-    const [jobs, exports] = await Promise.all([
+    const [jobs, exports, catalogs] = await Promise.all([
       request(`/api/v1/jobs?novelId=${encodeURIComponent(novelId)}`),
-      request(`/api/v1/novels/${encodeURIComponent(novelId)}/exports`)
+      request(`/api/v1/novels/${encodeURIComponent(novelId)}/exports`),
+      request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-catalogs`)
     ]);
     if (!workspaceStillSelected(novelId, token)) return;
     const translationJobs = jobs.items.filter((job) => job.type === 'translate_chapters');
+    const sourceImportJobs = jobs.items.filter((job) => job.type === 'source_import_catalog');
     const translationJob = translationJobs.find((job) => activeStates.has(job.state) || job.state === 'paused') ?? translationJobs[0];
+    const sourceImport = sourceImportJobs.find((job) => activeStates.has(job.state) || job.state === 'paused') ?? sourceImportJobs[0];
+    const currentCatalog = catalogs.items.find((catalog) => catalog.id === sourceImport?.target.catalogId) ?? catalogs.items[0];
+    const detail = currentCatalog ? await request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-catalogs/${encodeURIComponent(currentCatalog.id)}`) : null;
+    if (!workspaceStillSelected(novelId, token)) return;
     const exportItem = exports.items.find((item) => activeStates.has(item.state) || item.state === 'building') ?? exports.items[0];
     renderWorkspaceJob(translationJob);
     renderWorkspaceExport(exportItem, novelId);
+    renderSourceCatalog(currentCatalog, detail, sourceImport);
+    const progressChanged = currentCatalog && (workspaceCatalogProgress?.id !== currentCatalog.id || workspaceCatalogProgress.importedEntryCount !== currentCatalog.importedEntryCount);
+    workspaceCatalogProgress = currentCatalog && { id: currentCatalog.id, importedEntryCount: currentCatalog.importedEntryCount };
+    if (progressChanged) void refreshCurrentChapterNavigation(novelId, token).catch(() => {});
     const hasActiveWork = Boolean(
       translationJobs.some((job) => activeStates.has(job.state)) ||
+      sourceImportJobs.some((job) => activeStates.has(job.state)) ||
       exports.items.some((item) => activeStates.has(item.state) || item.state === 'building')
     );
     if (hasActiveWork) scheduleWorkspaceRefresh(novelId, token);
@@ -162,6 +222,9 @@ function showWorkspace(chapter) {
   workspaceJob.hidden = true;
   workspaceExport.hidden = true;
   workspaceExportDownload.hidden = true;
+  sourceCatalog.hidden = true;
+  sourceImportJob.hidden = true;
+  workspaceCatalogProgress = null;
   clearWorkspaceStatus();
   void refreshWorkspace(chapter.novelId, token);
 }
@@ -373,6 +436,43 @@ createEpub.addEventListener('click', async () => {
     createEpub.disabled = false;
   }
 });
+sourceCatalogForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!currentChapter?.hasSourceProvenance || !sourceBookUrl.value.trim()) return;
+  try {
+    discoverSourceCatalog.disabled = true;
+    clearWorkspaceStatus();
+    await request(`/api/v1/novels/${encodeURIComponent(currentChapter.novelId)}/source-catalogs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ bookUrl: sourceBookUrl.value.trim() })
+    });
+    setWorkspaceStatus('Source catalog saved. Import starts only when you choose it.');
+    await refreshWorkspace(currentChapter.novelId);
+  } catch (error) {
+    setWorkspaceStatus(error.message, { error: true });
+  } finally {
+    discoverSourceCatalog.disabled = false;
+  }
+});
+importSourceCatalog.addEventListener('click', async () => {
+  if (!currentChapter?.hasSourceProvenance || !workspaceCatalogProgress) return;
+  try {
+    importSourceCatalog.disabled = true;
+    clearWorkspaceStatus();
+    await request('/api/v1/jobs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ novelId: currentChapter.novelId, type: 'source_import_catalog', target: { catalogId: workspaceCatalogProgress.id } })
+    });
+    setWorkspaceStatus('Source import job saved.');
+    await refreshWorkspace(currentChapter.novelId);
+  } catch (error) {
+    setWorkspaceStatus(error.message, { error: true });
+  } finally {
+    importSourceCatalog.disabled = false;
+  }
+});
 workspaceJobControl.addEventListener('click', async () => {
   if (!currentChapter || !workspaceJobControl.dataset.jobId) return;
   try {
@@ -384,6 +484,19 @@ workspaceJobControl.addEventListener('click', async () => {
     setWorkspaceStatus(error.message, { error: true });
   } finally {
     workspaceJobControl.disabled = false;
+  }
+});
+sourceImportJobControl.addEventListener('click', async () => {
+  if (!currentChapter || !sourceImportJobControl.dataset.jobId) return;
+  try {
+    sourceImportJobControl.disabled = true;
+    clearWorkspaceStatus();
+    await request(`/api/v1/jobs/${encodeURIComponent(sourceImportJobControl.dataset.jobId)}/${sourceImportJobControl.dataset.action}?novelId=${encodeURIComponent(currentChapter.novelId)}`, { method: 'POST' });
+    await refreshWorkspace(currentChapter.novelId);
+  } catch (error) {
+    setWorkspaceStatus(error.message, { error: true });
+  } finally {
+    sourceImportJobControl.disabled = false;
   }
 });
 window.addEventListener('keydown', (event) => { if (event.target.matches('input, textarea, select, button, a, [contenteditable]')) return; if (event.key === 'ArrowLeft') navigate('previous'); if (event.key === 'ArrowRight') navigate('next'); });

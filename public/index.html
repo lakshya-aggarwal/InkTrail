@@ -34,6 +34,18 @@
               <button id="create-epub" type="button">Create EPUB</button>
             </div>
           </form>
+          <form id="source-catalog-form" novalidate>
+            <label for="source-book-url">Add Kujiang source</label>
+            <div class="source-catalog-controls"><input autocomplete="url" id="source-book-url" inputmode="url" name="bookUrl" placeholder="https://www.kujiang.com/book/..." required type="url"><button id="discover-source-catalog" type="submit">Discover source</button></div>
+          </form>
+          <div hidden id="source-catalog">
+            <p id="source-catalog-status" role="status"></p>
+            <button id="import-source-catalog" type="button">Import source chapters</button>
+            <div hidden id="source-import-job">
+              <p id="source-import-job-status" role="status"></p>
+              <button id="source-import-job-control" type="button"></button>
+            </div>
+          </div>
           <p id="workspace-status" role="status" tabindex="-1"></p>
           <div id="workspace-job" hidden>
             <p id="workspace-job-status" role="status"></p>

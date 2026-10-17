@@ -18,10 +18,17 @@ async function fixtureFetch(url) {
       headers: { 'content-type': 'text/html; charset=utf-8' }
     });
   }
+  if (/^https:\/\/www\.kujiang\.com\/book\/(91|92)\/catalog$/.test(value)) {
+    const bookId = new URL(value).pathname.split('/')[2];
+    return new Response(`<section class="kjsection-catalog"><a href="/book/${bookId}/7918">Fixture slow chapter</a></section>`, {
+      headers: { 'content-type': 'text/html; charset=utf-8' }
+    });
+  }
   if (value === failedSourceUrl) {
     throw new Error('fixture source fetch failure');
   }
   const chapterId = new URL(value).pathname.split('/').at(-1);
+  if (chapterId === '7918') await new Promise((resolve) => setTimeout(resolve, 2_500));
   const fixtureMode = chapterId.startsWith('7') ? chapterId.at(-1) : null;
   if (fixtureMode === '8' || fixtureMode === '9') {
     const marker = fixtureMode === '8' ? 'E2E_SLOW_TRANSLATION' : 'E2E_UNAVAILABLE_TRANSLATION';
