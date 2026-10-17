@@ -172,7 +172,7 @@ export function createJobRepository(database, clock) {
   `);
   const runnableJob = database.prepare(`
     select * from jobs
-    where ((? is null and type <> 'source_import_catalog') or type = ?)
+    where ((? is null and (? = 1 or type <> 'source_import_catalog')) or type = ?)
       and state = 'queued' and (next_run_at is null or next_run_at <= ?)
       and (type <> 'translate_chapters' or not exists (
         select 1 from jobs as active_translation
@@ -303,7 +303,7 @@ export function createJobRepository(database, clock) {
   const staleRunningJobs = database.prepare(`
     select * from jobs
     where state = 'running'
-      and type in ('translate_chapters', 'build_epub')
+      and (type in ('translate_chapters', 'build_epub') or (? = 1 and type = 'source_import_catalog'))
       and (claimed_at is null or claimed_at <= ?)
   `);
   const renewClaim = database.prepare(`
@@ -320,19 +320,25 @@ export function createJobRepository(database, clock) {
   `);
   const dueRetries = database.prepare(`
     select * from jobs
-    where type = 'translate_chapters' and state = 'retrying' and next_run_at <= ?
+    where (type = 'translate_chapters' or (? = 1 and type = 'source_import_catalog'))
+      and state = 'retrying' and next_run_at <= ?
     order by priority desc, created_at, id
   `);
   const releaseRetry = database.prepare(`
     update jobs set state = 'queued', next_run_at = null, updated_at = ?
     where id = ? and state = 'retrying' and next_run_at <= ?
   `);
-  const nextRetry = database.prepare("select min(next_run_at) as next_run_at from jobs where type = 'translate_chapters' and state = 'retrying'");
-  const nextRunningClaim = database.prepare("select min(claimed_at) as claimed_at from jobs where type in ('translate_chapters', 'build_epub') and state = 'running' and claimed_at is not null");
+  const nextRetry = database.prepare("select min(next_run_at) as next_run_at from jobs where (type = 'translate_chapters' or (? = 1 and type = 'source_import_catalog')) and state = 'retrying'");
+  const nextRunningClaim = database.prepare("select min(claimed_at) as claimed_at from jobs where (type in ('translate_chapters', 'build_epub') or (? = 1 and type = 'source_import_catalog')) and state = 'running' and claimed_at is not null");
   const activeTranslationClaim = database.prepare(`
     select 1 from jobs
     where id = ? and novel_id = ? and type = 'translate_chapters'
       and state = 'running' and claim_token = ? and current_chapter_id = ?
+  `);
+  const activeSourceImportClaim = database.prepare(`
+    select 1 from jobs
+    where id = ? and novel_id = ? and type = 'source_import_catalog'
+      and state = 'running' and claim_token = ? and current_catalog_entry_id = ?
   `);
 
   function withinTransaction(action) {
@@ -516,6 +522,116 @@ export function createJobRepository(database, clock) {
       });
     },
 
+    completeSourceImportAttempt(input) {
+      const { novelId, jobId, attemptId, catalogEntryId, chapterId, claimToken } = requireObject(input);
+      const id = requireNovel(novelId);
+      const entryId = requireId(catalogEntryId, 'catalogEntryId');
+      const sourceChapterId = requireId(chapterId, 'chapterId');
+      const token = requireId(claimToken, 'claimToken');
+      return withinTransaction(() => {
+        const job = jobInNovel.get(requireId(jobId, 'jobId'), id);
+        if (!job) throw new NotFoundError('job not found');
+        if (job.type !== 'source_import_catalog' || job.state !== 'running' || job.claim_token !== token) {
+          throw new ConflictError('source import job claim is no longer active');
+        }
+        const attempt = attemptById.get(requireId(attemptId, 'attemptId'), job.id);
+        if (!attempt || attempt.claim_token !== token || attempt.catalog_entry_id !== entryId) {
+          throw new ConflictError('source import attempt is no longer active');
+        }
+        const catalogId = JSON.parse(job.target_json).catalogId;
+        if (!catalogEntryMapping.get(entryId, id, catalogId, sourceChapterId)) {
+          throw new ConflictError('catalog entry has not been imported');
+        }
+        const finishedAt = clock().toISOString();
+        if (finishAttempt.run({ id: attempt.id, jobId: job.id, claimToken: token, state: 'succeeded', finishedAt, errorCode: null, errorMessage: null }).changes === 0) {
+          throw new ConflictError('source import attempt is no longer active');
+        }
+        if (!completedCatalogEntryEvent.get(job.id, entryId)) {
+          appendEvent(job, {
+            type: 'catalog_entry_completed',
+            message: 'Catalog entry completed.',
+            catalogEntryId: entryId,
+            details: { catalogEntryId: entryId, attemptNumber: attempt.attempt_number }
+          });
+        }
+        if (nextUncompletedCatalogEntry.get(catalogId, id)) return { completed: false };
+        const completed = {
+          id: job.id,
+          novelId: id,
+          fromState: 'running',
+          state: 'completed',
+          expectedClaimToken: token,
+          nextRunAt: null,
+          claimedAt: null,
+          claimToken: null,
+          currentChapterId: null,
+          currentCatalogEntryId: entryId,
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          updatedAt: finishedAt,
+          completedAt: finishedAt
+        };
+        if (updateJob.run(completed).changes === 0) throw new ConflictError('source import job claim is no longer active');
+        appendEvent(jobById.get(job.id), { type: 'completed', message: 'Job completed.', catalogEntryId: entryId, details: { catalogEntryId: entryId } });
+        return { completed: true };
+      });
+    },
+
+    failSourceImportAttempt(input) {
+      const { novelId, jobId, attemptId, catalogEntryId, claimToken, retry, terminalState = 'failed', nextRunAt = null, errorCode, errorMessage } = requireObject(input);
+      const id = requireNovel(novelId);
+      const entryId = requireId(catalogEntryId, 'catalogEntryId');
+      const token = requireId(claimToken, 'claimToken');
+      if (typeof retry !== 'boolean') throw new ValidationError('retry must be a boolean');
+      if (!retry && !['paused', 'failed'].includes(terminalState)) throw new ValidationError('terminalState is invalid');
+      return withinTransaction(() => {
+        const job = jobInNovel.get(requireId(jobId, 'jobId'), id);
+        if (!job) throw new NotFoundError('job not found');
+        if (job.type !== 'source_import_catalog' || job.state !== 'running' || job.claim_token !== token) {
+          throw new ConflictError('source import job claim is no longer active');
+        }
+        const attempt = attemptById.get(requireId(attemptId, 'attemptId'), job.id);
+        if (!attempt || attempt.claim_token !== token || attempt.catalog_entry_id !== entryId) {
+          throw new ConflictError('source import attempt is no longer active');
+        }
+        const now = clock().toISOString();
+        if (finishAttempt.run({
+          id: attempt.id,
+          jobId: job.id,
+          claimToken: token,
+          state: retry ? 'retryable_failed' : 'paused_after_failure',
+          finishedAt: now,
+          errorCode: requireOptionalText(errorCode, 'errorCode'),
+          errorMessage: requireOptionalText(errorMessage, 'errorMessage')
+        }).changes === 0) throw new ConflictError('source import attempt is no longer active');
+        const state = retry ? 'retrying' : terminalState;
+        const updated = {
+          id: job.id,
+          novelId: id,
+          fromState: 'running',
+          state,
+          expectedClaimToken: token,
+          nextRunAt: retry ? requireId(nextRunAt, 'nextRunAt') : null,
+          claimedAt: null,
+          claimToken: null,
+          currentChapterId: null,
+          currentCatalogEntryId: entryId,
+          lastErrorCode: requireOptionalText(errorCode, 'errorCode'),
+          lastErrorMessage: requireOptionalText(errorMessage, 'errorMessage'),
+          updatedAt: now,
+          completedAt: state === 'failed' ? now : null
+        };
+        if (updateJob.run(updated).changes === 0) throw new ConflictError('source import job claim is no longer active');
+        appendEvent(jobById.get(job.id), {
+          type: state === 'retrying' ? 'retry_scheduled' : state === 'paused' ? 'paused' : 'failed',
+          message: state === 'retrying' ? 'Job retrying.' : state === 'paused' ? 'Job paused.' : 'Job failed.',
+          catalogEntryId: entryId,
+          details: { catalogEntryId: entryId, attemptNumber: attempt.attempt_number }
+        });
+        return toJob(jobById.get(job.id));
+      });
+    },
+
     getJob(input) {
       const { novelId, jobId } = requireObject(input);
       const job = jobInNovel.get(requireId(jobId, 'jobId'), requireNovel(novelId));
@@ -529,12 +645,13 @@ export function createJobRepository(database, clock) {
     },
 
     claimNextRunnable(input) {
-      const { claimToken: inputClaimToken, type = null } = requireObject(input);
+      const { claimToken: inputClaimToken, type = null, includeSourceImports = false } = requireObject(input);
       const claimToken = requireId(inputClaimToken, 'claimToken');
       if (type !== null && !jobTypes.has(type)) throw new ValidationError('job type is invalid');
+      if (typeof includeSourceImports !== 'boolean') throw new ValidationError('includeSourceImports must be a boolean');
       return withinTransaction(() => {
         const now = clock().toISOString();
-        const candidate = runnableJob.get(type, type, now);
+        const candidate = runnableJob.get(type, includeSourceImports ? 1 : 0, type, now);
         if (!candidate) return null;
         if (claimJob.run(now, claimToken, now, candidate.id, now).changes === 0) return null;
         const claimed = jobById.get(candidate.id);
@@ -715,12 +832,21 @@ export function createJobRepository(database, clock) {
       }
     },
 
+    assertActiveSourceImportClaim(input) {
+      const { novelId, jobId, claimToken, catalogEntryId } = requireObject(input);
+      const id = requireNovel(novelId);
+      if (!activeSourceImportClaim.get(requireId(jobId, 'jobId'), id, requireId(claimToken, 'claimToken'), requireId(catalogEntryId, 'catalogEntryId'))) {
+        throw new ConflictError('source import job claim is no longer active');
+      }
+    },
+
     recoverStaleTranslationClaims(input) {
-      const { claimedBefore } = requireObject(input);
+      const { claimedBefore, includeSourceImports = false } = requireObject(input);
       const cutoff = requireId(claimedBefore, 'claimedBefore');
+      if (typeof includeSourceImports !== 'boolean') throw new ValidationError('includeSourceImports must be a boolean');
       return withinTransaction(() => {
         const now = clock().toISOString();
-        return staleRunningJobs.all(cutoff).flatMap((job) => {
+        return staleRunningJobs.all(includeSourceImports ? 1 : 0, cutoff).flatMap((job) => {
           abandonStartedAttempts.run(now, job.id);
           const state = job.next_run_at === null ? 'queued' : 'retrying';
           if (recoverJob.run(state, now, job.id).changes === 0) return [];
@@ -772,22 +898,28 @@ export function createJobRepository(database, clock) {
       });
     },
 
-    releaseDueTranslationRetries() {
+    releaseDueTranslationRetries(input = {}) {
+      const { includeSourceImports = false } = requireObject(input);
+      if (typeof includeSourceImports !== 'boolean') throw new ValidationError('includeSourceImports must be a boolean');
       return withinTransaction(() => {
         const now = clock().toISOString();
-        return dueRetries.all(now).flatMap((job) => {
+        return dueRetries.all(includeSourceImports ? 1 : 0, now).flatMap((job) => {
           if (releaseRetry.run(now, job.id, now).changes === 0) return [];
           return [toJob(jobById.get(job.id))];
         });
       });
     },
 
-    nextTranslationRetryAt() {
-      return nextRetry.get().next_run_at;
+    nextTranslationRetryAt(input = {}) {
+      const { includeSourceImports = false } = requireObject(input);
+      if (typeof includeSourceImports !== 'boolean') throw new ValidationError('includeSourceImports must be a boolean');
+      return nextRetry.get(includeSourceImports ? 1 : 0).next_run_at;
     },
 
-    nextRunningClaimAt() {
-      return nextRunningClaim.get().claimed_at;
+    nextRunningClaimAt(input = {}) {
+      const { includeSourceImports = false } = requireObject(input);
+      if (typeof includeSourceImports !== 'boolean') throw new ValidationError('includeSourceImports must be a boolean');
+      return nextRunningClaim.get(includeSourceImports ? 1 : 0).claimed_at;
     },
 
     finishAttempt(input) {

@@ -3,12 +3,13 @@ import test from 'node:test';
 import { createChapterRepository } from '../../src/chapters/chapter-repository.js';
 import { openDatabase } from '../../src/db/database.js';
 import { migrate } from '../../src/db/migrate.js';
-import { ConflictError, TranslationProviderError } from '../../src/domain/errors.js';
+import { ConflictError, SourceFetchError, TranslationProviderError } from '../../src/domain/errors.js';
 import { createJobRepository } from '../../src/jobs/job-repository.js';
 import { createTranslationJobRunner, TRANSLATION_JOB_LEASE_MS } from '../../src/jobs/translation-job-runner.js';
 import { createExportRepository } from '../../src/epub/export-repository.js';
 import { createNovelRepository } from '../../src/novels/novel-repository.js';
 import { createSourceRepository } from '../../src/sources/source-repository.js';
+import { createSourceCatalogRepository } from '../../src/sources/source-catalog-repository.js';
 import { createMemoryRepository } from '../../src/memory/memory-repository.js';
 import { createQualityFindingRepository } from '../../src/translation/quality-finding-repository.js';
 import { createTranslationService as createSharedTranslationService } from '../../src/translation/translation-service.js';
@@ -60,6 +61,7 @@ function fixture() {
     novels: createNovelRepository(database, clock.now),
     chapters: createChapterRepository(database, clock.now),
     sources: createSourceRepository(database, clock.now),
+    catalogs: createSourceCatalogRepository(database, clock.now),
     memory: createMemoryRepository(database, clock.now),
     findings: createQualityFindingRepository(database, clock.now),
     jobs: createJobRepository(database, clock.now),
@@ -118,14 +120,94 @@ function createTranslationService(repositories, behavior = async () => {}) {
   };
 }
 
-function createRunner({ repositories, clock, translationService, concurrency = 2 }) {
+function createRunner({ repositories, clock, translationService, sourceImportService = null, scheduler = createScheduler(clock), concurrency = 2 }) {
   return createTranslationJobRunner({
     jobs: repositories.jobs,
     translationService,
+    sourceImportService,
     clock: clock.now,
-    scheduler: createScheduler(clock),
+    scheduler,
     concurrency
   });
+}
+
+function seededCatalog(repositories, novel, count = 2) {
+  const source = repositories.sources.createOrGetNovelSource({
+    novelId: novel.id,
+    site: 'source-runner',
+    externalNovelId: novel.id,
+    sourceUrl: `https://source-runner.test/${novel.id}`,
+    normalizedUrl: `https://source-runner.test/${novel.id}`,
+    title: novel.title
+  });
+  return repositories.catalogs.createOrGetSnapshot({
+    novelId: novel.id,
+    novelSourceId: source.id,
+    site: source.site,
+    canonicalBookUrl: source.normalizedUrl,
+    contentSha256: `${count}`.padStart(64, 'a'),
+    entries: Array.from({ length: count }, (_, index) => ({
+      ordinal: index + 1,
+      externalChapterId: `${index + 1}`,
+      sourceUrl: `https://source-runner.test/${novel.id}/${index + 1}`,
+      normalizedUrl: `https://source-runner.test/${novel.id}/${index + 1}`,
+      sourceTitle: `Source ${index + 1}`
+    }))
+  });
+}
+
+function createSourceImportService(repositories, behavior = async () => {}) {
+  const calls = [];
+  return {
+    calls,
+    async importChapter(input) {
+      calls.push(input);
+      await behavior(input, calls.length);
+      repositories.jobs.assertActiveSourceImportClaim({ novelId: input.novelId, ...input.claim });
+      const existing = repositories.sources.getChapterSource({
+        novelId: input.novelId,
+        site: 'source-runner',
+        normalizedUrl: input.sourceUrl
+      });
+      if (existing) {
+        return {
+          chapter: repositories.chapters.getReaderChapter(input.novelId, input.chapterNumber),
+          source: existing,
+          created: false
+        };
+      }
+      const source = repositories.sources.createOrGetNovelSource({
+        novelId: input.novelId,
+        site: 'source-runner',
+        externalNovelId: input.novelId,
+        sourceUrl: `https://source-runner.test/${input.novelId}`,
+        normalizedUrl: `https://source-runner.test/${input.novelId}`,
+        title: 'Source runner'
+      });
+      const chapter = repositories.chapters.recordChapter({
+        novelId: input.novelId,
+        chapterNumber: input.chapterNumber,
+        title: `Source ${input.chapterNumber}`,
+        originalText: `Original ${input.chapterNumber}`,
+        sourceUrl: input.sourceUrl
+      });
+      const chapterSource = repositories.sources.createChapterSource({
+        novelId: input.novelId,
+        chapterId: chapter.id,
+        novelSourceId: source.id,
+        site: 'source-runner',
+        externalChapterId: `${input.chapterNumber}`,
+        sourceUrl: input.sourceUrl,
+        normalizedUrl: input.sourceUrl,
+        sourceTitle: chapter.title,
+        previousSourceUrl: null,
+        nextSourceUrl: null,
+        fetchedAt: '2026-10-17T00:00:00.000Z',
+        contentSha256: `${input.novelId}${input.chapterNumber}`.padEnd(64, '0')
+      });
+      return { chapter, source: chapterSource, created: true };
+    }
+  };
 }
 
 test('startup recovery resets a recovered EPUB snapshot before claiming work', async () => {
@@ -169,6 +251,146 @@ test('generic runner rejects source-import lifecycle controls', async () => {
 
   assert.throws(() => runner.pause({ novelId: 'novel', jobId: 'source-job' }), ConflictError);
   await assert.rejects(runner.resume({ novelId: 'novel', jobId: 'source-job' }), ConflictError);
+});
+
+test('imports source catalog entries in ascending ordinal order and completes only after the last entry', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Catalog import' });
+  const snapshot = seededCatalog(repositories, novel, 3);
+  const job = repositories.jobs.createSourceImportCatalogJob({ novelId: novel.id, target: { catalogId: snapshot.catalog.id } });
+  const sourceImportService = createSourceImportService(repositories);
+  const runner = createRunner({ repositories, clock, translationService: { async translateChapter() {} }, sourceImportService });
+
+  await runner.start();
+  await settle();
+
+  assert.deepEqual(sourceImportService.calls.map(({ chapterNumber }) => chapterNumber), [1, 2, 3]);
+  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).state, 'completed');
+  assert.deepEqual(
+    repositories.jobs.listJobAttempts({ novelId: novel.id, jobId: job.id })
+      .map(({ catalogEntryId, attemptNumber, state }) => [catalogEntryId, attemptNumber, state])
+      .sort(),
+    snapshot.entries.map((entry) => [entry.id, 1, 'succeeded']).sort()
+  );
+  assert.deepEqual(
+    repositories.jobs.listJobEvents({ novelId: novel.id, jobId: job.id })
+      .filter(({ type }) => type === 'catalog_entry_completed')
+      .map(({ catalogEntryId }) => catalogEntryId)
+      .sort(),
+    snapshot.entries.map(({ id }) => id).sort()
+  );
+  await runner.stop();
+});
+
+test('source imports retry at fifteen-second intervals and pause after four fetch failures', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Source retries' });
+  const snapshot = seededCatalog(repositories, novel, 1);
+  const job = repositories.jobs.createSourceImportCatalogJob({ novelId: novel.id, target: { catalogId: snapshot.catalog.id } });
+  const scheduler = createScheduler(clock);
+  const sourceImportService = createSourceImportService(repositories, async () => { throw new SourceFetchError('upstream details'); });
+  const runner = createRunner({ repositories, clock, translationService: { async translateChapter() {} }, sourceImportService, scheduler });
+
+  await runner.start();
+  await settle();
+  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).nextRunAt, '2026-10-15T00:00:15.000Z');
+  await scheduler.advance(14_999);
+  assert.equal(sourceImportService.calls.length, 1);
+  await scheduler.advance(1);
+  await scheduler.advance(15_000);
+  await scheduler.advance(15_000);
+  await settle();
+
+  const paused = repositories.jobs.getJob({ novelId: novel.id, jobId: job.id });
+  assert.equal(sourceImportService.calls.length, 4);
+  assert.equal(paused.state, 'paused');
+  assert.equal(paused.lastErrorCode, 'source_unavailable');
+  assert.equal(paused.lastErrorMessage, 'Source is temporarily unavailable.');
+  assert.deepEqual(
+    repositories.jobs.listJobAttempts({ novelId: novel.id, jobId: job.id }).map(({ state }) => state),
+    ['retryable_failed', 'retryable_failed', 'retryable_failed', 'paused_after_failure']
+  );
+  await runner.stop();
+});
+
+test('source integrity failures are terminal and retain no upstream detail', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Source failure' });
+  const snapshot = seededCatalog(repositories, novel, 1);
+  const job = repositories.jobs.createSourceImportCatalogJob({ novelId: novel.id, target: { catalogId: snapshot.catalog.id } });
+  const sourceImportService = createSourceImportService(repositories, async () => { throw new ConflictError('private provenance diagnostic'); });
+  const runner = createRunner({ repositories, clock, translationService: { async translateChapter() {} }, sourceImportService });
+
+  await runner.start();
+  await settle();
+
+  const failed = repositories.jobs.getJob({ novelId: novel.id, jobId: job.id });
+  assert.equal(failed.state, 'failed');
+  assert.deepEqual({ code: failed.lastErrorCode, message: failed.lastErrorMessage }, {
+    code: 'source_import_failed',
+    message: 'Source import failed.'
+  });
+  assert.equal(repositories.jobs.listJobEvents({ novelId: novel.id, jobId: job.id }).some(({ message }) => message.includes('private')), false);
+  await runner.stop();
+});
+
+test('completes an empty source catalog without calling the importer', async () => {
+  const transitions = [];
+  const jobs = {
+    recoverStaleTranslationClaims() { return []; },
+    releaseDueTranslationRetries() {},
+    claimNextRunnable() {
+      return transitions.length === 0 ? { id: 'empty', novelId: 'novel', type: 'source_import_catalog', claimToken: 'claim', target: { catalogId: 'catalog' } } : null;
+    },
+    nextSourceImportCatalogEntry() { return null; },
+    transitionJob(input) { transitions.push(input); },
+    nextTranslationRetryAt() { return null; },
+    nextRunningClaimAt() { return null; },
+    renewTranslationClaim() { return false; }
+  };
+  const sourceImportService = { async importChapter() { throw new Error('should not import'); } };
+  const runner = createTranslationJobRunner({ jobs, translationService: { async translateChapter() {} }, sourceImportService });
+
+  await runner.start();
+  await settle();
+
+  assert.deepEqual(transitions, [{ novelId: 'novel', jobId: 'empty', claimToken: 'claim', toState: 'completed' }]);
+  await runner.stop();
+});
+
+test('a stale source worker cannot write a chapter or catalog completion after reclaim', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Source claim handoff' });
+  const snapshot = seededCatalog(repositories, novel, 1);
+  const job = repositories.jobs.createSourceImportCatalogJob({ novelId: novel.id, target: { catalogId: snapshot.catalog.id } });
+  const releases = [];
+  const sourceImportService = createSourceImportService(repositories, () => new Promise((resolve) => releases.push(resolve)));
+  const first = createRunner({ repositories, clock, translationService: { async translateChapter() {} }, sourceImportService });
+  const second = createRunner({ repositories, clock, translationService: { async translateChapter() {} }, sourceImportService });
+
+  await first.start();
+  await settle();
+  clock.advance(TRANSLATION_JOB_LEASE_MS);
+  await second.start();
+  await settle();
+  assert.equal(sourceImportService.calls.length, 2);
+  releases[1]();
+  await settle();
+  releases[0]();
+  await settle();
+
+  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).state, 'completed');
+  assert.equal(database.prepare('select count(*) as count from chapters where novel_id = ?').get(novel.id).count, 1);
+  assert.equal(
+    repositories.jobs.listJobEvents({ novelId: novel.id, jobId: job.id }).filter(({ type }) => type === 'catalog_entry_completed').length,
+    1
+  );
+  await first.stop();
+  await second.stop();
 });
 
 test('serializes selected chapters for one novel in ascending order', async (t) => {

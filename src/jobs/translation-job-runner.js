@@ -1,4 +1,4 @@
-import { ConflictError } from '../domain/errors.js';
+import { ConflictError, SourceFetchError } from '../domain/errors.js';
 
 const RETRY_DELAY_MS = 15_000;
 const MAX_ATTEMPTS = 4;
@@ -29,7 +29,14 @@ function errorDetails(error) {
   };
 }
 
-export function createTranslationJobRunner({ jobs, translationService, epubBuilder = null, clock = () => new Date(), scheduler = defaultScheduler(), concurrency = 2, retryDelayMs = RETRY_DELAY_MS }) {
+function sourceErrorDetails(error) {
+  if (error instanceof SourceFetchError) {
+    return { code: 'source_unavailable', message: 'Source is temporarily unavailable.', retryable: true };
+  }
+  return { code: 'source_import_failed', message: 'Source import failed.', retryable: false };
+}
+
+export function createTranslationJobRunner({ jobs, translationService, sourceImportService = null, epubBuilder = null, clock = () => new Date(), scheduler = defaultScheduler(), concurrency = 2, retryDelayMs = RETRY_DELAY_MS }) {
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new TypeError('concurrency must be a positive integer');
   if (!Number.isSafeInteger(retryDelayMs) || retryDelayMs < 0) throw new TypeError('retryDelayMs must be a non-negative integer');
   let started = false;
@@ -53,7 +60,8 @@ export function createTranslationJobRunner({ jobs, translationService, epubBuild
 
   function recoverStaleClaims() {
     const recovered = jobs.recoverStaleTranslationClaims({
-      claimedBefore: new Date(clock().getTime() - TRANSLATION_JOB_LEASE_MS).toISOString()
+      claimedBefore: new Date(clock().getTime() - TRANSLATION_JOB_LEASE_MS).toISOString(),
+      includeSourceImports: sourceImportService !== null
     });
     if (epubBuilder) {
       for (const job of recovered) {
@@ -82,6 +90,62 @@ export function createTranslationJobRunner({ jobs, translationService, epubBuild
     };
     try {
       leaseTimer = scheduler.schedule(TRANSLATION_JOB_LEASE_MS / 2, renewLease);
+      if (job.type === 'source_import_catalog') {
+        if (!sourceImportService) throw new ConflictError('source import jobs require their dedicated runner');
+        while (started && !stopping) {
+          const entry = jobs.nextSourceImportCatalogEntry({ novelId: job.novelId, jobId: job.id });
+          if (!entry) {
+            jobs.transitionJob({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken, toState: 'completed' });
+            return;
+          }
+          const attempt = jobs.startAttempt({
+            novelId: job.novelId,
+            jobId: job.id,
+            catalogEntryId: entry.id,
+            claimToken: job.claimToken
+          });
+          try {
+            const imported = await sourceImportService.importChapter({
+              novelId: job.novelId,
+              sourceUrl: entry.sourceUrl,
+              chapterNumber: entry.ordinal,
+              claim: { jobId: job.id, claimToken: job.claimToken, catalogEntryId: entry.id }
+            });
+            const settled = jobs.completeSourceImportAttempt({
+              novelId: job.novelId,
+              jobId: job.id,
+              attemptId: attempt.id,
+              catalogEntryId: entry.id,
+              chapterId: imported.chapter.id,
+              claimToken: job.claimToken
+            });
+            if (settled.completed) return;
+          } catch (error) {
+            const details = sourceErrorDetails(error);
+            const retry = details.retryable && attempt.attemptNumber < MAX_ATTEMPTS;
+            try {
+              const failed = jobs.failSourceImportAttempt({
+                novelId: job.novelId,
+                jobId: job.id,
+                attemptId: attempt.id,
+                catalogEntryId: entry.id,
+                claimToken: job.claimToken,
+                retry,
+                terminalState: details.retryable ? 'paused' : 'failed',
+                nextRunAt: retry ? retryAt(clock, retryDelayMs) : null,
+                errorCode: details.code,
+                errorMessage: details.message
+              });
+              if (retry) scheduleWake(failed.nextRunAt);
+            } catch (finishError) {
+              if (finishError instanceof ConflictError) return;
+              throw finishError;
+            }
+            return;
+          }
+        }
+        return;
+      }
       if (job.type === 'build_epub') {
         const attempt = jobs.startAttempt({ novelId: job.novelId, jobId: job.id, claimToken: job.claimToken });
         try {
@@ -183,17 +247,18 @@ export function createTranslationJobRunner({ jobs, translationService, epubBuild
     pumping = true;
     try {
       recoverStaleClaims();
-      jobs.releaseDueTranslationRetries();
+      jobs.releaseDueTranslationRetries({ includeSourceImports: sourceImportService !== null });
       while (started && !stopping && active < concurrency) {
         const job = jobs.claimNextRunnable({ claimToken: crypto.randomUUID(), type: epubBuilder ? null : 'translate_chapters' });
-        if (!job) break;
+        const sourceJob = job ?? (sourceImportService ? jobs.claimNextRunnable({ claimToken: crypto.randomUUID(), type: 'source_import_catalog' }) : null);
+        if (!sourceJob) break;
         active += 1;
-        const work = process(job);
+        const work = process(sourceJob);
         activeWork.add(work);
         void work.catch(() => {}).finally(() => activeWork.delete(work));
       }
-      const retryAt = jobs.nextTranslationRetryAt();
-      const claimedAt = jobs.nextRunningClaimAt();
+      const retryAt = jobs.nextTranslationRetryAt({ includeSourceImports: sourceImportService !== null });
+      const claimedAt = jobs.nextRunningClaimAt({ includeSourceImports: sourceImportService !== null });
       const claimExpiryAt = claimedAt === null ? null : new Date(new Date(claimedAt).getTime() + TRANSLATION_JOB_LEASE_MS).toISOString();
       scheduleWake([retryAt, claimExpiryAt].filter(Boolean).sort()[0] ?? null);
     } finally {
@@ -228,7 +293,7 @@ export function createTranslationJobRunner({ jobs, translationService, epubBuild
 
     pause(input) {
       const job = jobs.getJob(input);
-      if (job.type === 'source_import_catalog') throw new ConflictError('source import jobs require their dedicated runner');
+      if (job.type === 'source_import_catalog' && !sourceImportService) throw new ConflictError('source import jobs require their dedicated runner');
       const paused = jobs.pauseTranslationJob(input);
       if (job.type === 'build_epub') epubBuilder.reset({ novelId: job.novelId, exportId: job.target.exportId });
       for (const process of activeProcesses.values()) {
@@ -239,7 +304,7 @@ export function createTranslationJobRunner({ jobs, translationService, epubBuild
 
     async resume(input) {
       const job = jobs.getJob(input);
-      if (job.type === 'source_import_catalog') throw new ConflictError('source import jobs require their dedicated runner');
+      if (job.type === 'source_import_catalog' && !sourceImportService) throw new ConflictError('source import jobs require their dedicated runner');
       if (job.state === 'queued') return job;
       const resumed = jobs.transitionJob({ ...input, toState: 'queued' });
       await wake();

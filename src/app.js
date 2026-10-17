@@ -78,6 +78,7 @@ export async function createApp({ databasePath, exportRoot = join(dirname(databa
   const runner = createTranslationJobRunner({
     jobs: repositories.jobs,
     translationService,
+    sourceImportService,
     epubBuilder,
     clock,
     ...runnerOptions

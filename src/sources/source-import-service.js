@@ -37,10 +37,15 @@ function withinTransaction(database, action) {
 export function createSourceImportService({ database, repositories, adapterRegistry, clock }) {
   return {
     async importChapter(input) {
-      const { novelId: inputNovelId, sourceUrl: inputSourceUrl, chapterNumber: inputChapterNumber } = requireObject(input);
+      const { novelId: inputNovelId, sourceUrl: inputSourceUrl, chapterNumber: inputChapterNumber, claim = null } = requireObject(input);
       const novelId = requireText(inputNovelId, 'novelId');
       const sourceUrl = requireText(inputSourceUrl, 'sourceUrl');
       const chapterNumber = requireChapterNumber(inputChapterNumber);
+      const sourceClaim = claim === null ? null : {
+        jobId: requireText(requireObject(claim).jobId, 'claim.jobId'),
+        claimToken: requireText(requireObject(claim).claimToken, 'claim.claimToken'),
+        catalogEntryId: requireText(requireObject(claim).catalogEntryId, 'claim.catalogEntryId')
+      };
       const adapter = adapterRegistry.getAdapter(sourceUrl);
       if (!adapter) {
         throw new ValidationError('sourceUrl is not supported');
@@ -52,6 +57,9 @@ export function createSourceImportService({ database, repositories, adapterRegis
       const contentSha256 = createHash('sha256').update(originalText).digest('hex');
 
       return withinTransaction(database, () => {
+        if (sourceClaim) {
+          repositories.jobs.assertActiveSourceImportClaim({ novelId, ...sourceClaim });
+        }
         const existingSource = repositories.sources.getChapterSource({
           novelId,
           site: sourceChapter.site,

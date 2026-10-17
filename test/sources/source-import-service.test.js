@@ -7,9 +7,11 @@ import { createChapterRepository } from '../../src/chapters/chapter-repository.j
 import { openDatabase } from '../../src/db/database.js';
 import { migrate } from '../../src/db/migrate.js';
 import { ConflictError, NotFoundError, SourceFetchError, ValidationError } from '../../src/domain/errors.js';
+import { createJobRepository } from '../../src/jobs/job-repository.js';
 import { createNovelRepository } from '../../src/novels/novel-repository.js';
 import { createAdapterRegistry } from '../../src/sources/adapter-registry.js';
 import { createKujiangAdapter } from '../../src/sources/kujiang-adapter.js';
+import { createSourceCatalogRepository } from '../../src/sources/source-catalog-repository.js';
 import { createSourceImportService } from '../../src/sources/source-import-service.js';
 import { createSourceRepository } from '../../src/sources/source-repository.js';
 
@@ -25,7 +27,7 @@ async function chapterHtml() {
 function createRepositories() {
   const database = openDatabase({ databasePath: ':memory:' });
   migrate(database);
-  return repositoriesForDatabase(database);
+  return repositoriesForDatabase(database, { durable: true });
 }
 
 function createLegacyRepositories() {
@@ -37,12 +39,16 @@ function createLegacyRepositories() {
   return repositoriesForDatabase(database);
 }
 
-function repositoriesForDatabase(database) {
+function repositoriesForDatabase(database, { durable = false } = {}) {
   return {
     database,
     novels: createNovelRepository(database, clock),
     chapters: createChapterRepository(database, clock),
-    sources: createSourceRepository(database, clock)
+    sources: createSourceRepository(database, clock),
+    ...(durable ? {
+      catalogs: createSourceCatalogRepository(database, clock),
+      jobs: createJobRepository(database, clock)
+    } : {})
   };
 }
 
@@ -266,4 +272,42 @@ test('validates before fetch and leaves no state after source fetch or parse fai
     SourceFetchError
   );
   assert.deepEqual(tableCounts(repositories.database), { chapters: 0, novel_sources: 0, chapter_sources: 0 });
+});
+
+test('a stale source-import claim cannot create a chapter or provenance mapping', async (t) => {
+  const repositories = createRepositories();
+  t.after(() => repositories.database.close());
+  const novel = repositories.novels.createNovel({ title: 'Claim guard' });
+  const source = repositories.sources.createOrGetNovelSource({
+    novelId: novel.id,
+    site: 'kujiang',
+    externalNovelId: '9',
+    sourceUrl: 'https://www.kujiang.com/book/9',
+    normalizedUrl: 'https://www.kujiang.com/book/9',
+    title: novel.title
+  });
+  const snapshot = repositories.catalogs.createOrGetSnapshot({
+    novelId: novel.id,
+    novelSourceId: source.id,
+    site: source.site,
+    canonicalBookUrl: source.normalizedUrl,
+    contentSha256: 'a'.repeat(64),
+    entries: [{ ordinal: 1, externalChapterId: '906595', sourceUrl: chapterUrl, normalizedUrl: chapterUrl, sourceTitle: 'One' }]
+  });
+  const job = repositories.jobs.createSourceImportCatalogJob({ novelId: novel.id, target: { catalogId: snapshot.catalog.id } });
+  const claim = repositories.jobs.claimNextRunnable({ claimToken: 'source-claim', type: 'source_import_catalog' });
+  repositories.jobs.startAttempt({ novelId: novel.id, jobId: job.id, catalogEntryId: snapshot.entries[0].id, claimToken: claim.claimToken });
+  repositories.jobs.pauseTranslationJob({ novelId: novel.id, jobId: job.id });
+  const service = createService(repositories, async () => new Response(await chapterHtml(), { headers: { 'content-type': 'text/html' } }));
+
+  await assert.rejects(
+    () => service.importChapter({
+      novelId: novel.id,
+      sourceUrl: chapterUrl,
+      chapterNumber: 1,
+      claim: { jobId: job.id, claimToken: claim.claimToken, catalogEntryId: snapshot.entries[0].id }
+    }),
+    ConflictError
+  );
+  assert.deepEqual(tableCounts(repositories.database), { chapters: 0, novel_sources: 1, chapter_sources: 0 });
 });
