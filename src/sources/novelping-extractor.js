@@ -9,7 +9,8 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 3;
 const HTTP_TOKEN = "[!#$%&'*+\\-.^_`|~0-9A-Za-z]+";
 const HTTP_QUOTED_STRING = '"(?:[\\t !#-\\[\\]-~]|\\\\[\\t !-~])*"';
-const HTML_CONTENT_TYPE = new RegExp(`^\\s*text/html\\s*(?:;\\s*${HTTP_TOKEN}\\s*=\\s*(?:${HTTP_TOKEN}|${HTTP_QUOTED_STRING})\\s*)*$`, 'i');
+const HTTP_OPTIONAL_WHITESPACE = '[ \\t]*';
+const HTML_CONTENT_TYPE = new RegExp(`^${HTTP_OPTIONAL_WHITESPACE}text/html${HTTP_OPTIONAL_WHITESPACE}(?:;${HTTP_OPTIONAL_WHITESPACE}${HTTP_TOKEN}${HTTP_OPTIONAL_WHITESPACE}=${HTTP_OPTIONAL_WHITESPACE}(?:${HTTP_TOKEN}|${HTTP_QUOTED_STRING})${HTTP_OPTIONAL_WHITESPACE})*$`, 'i');
 
 function isHtmlContentType(value) {
   return typeof value === 'string' && HTML_CONTENT_TYPE.test(value);

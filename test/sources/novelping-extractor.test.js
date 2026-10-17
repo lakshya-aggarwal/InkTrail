@@ -77,6 +77,7 @@ test('maps timeout, content type, body limits, and malformed HTML to safe retrya
     () => createNovelPingExtractor({ fetch: async () => new Response('not html', { headers: { 'content-type': 'text/plain' } }) }).fetchEvidence(chapterUrl),
     () => createNovelPingExtractor({ fetch: async () => new Response('not html', { headers: { 'content-type': 'application/x-text/html' } }) }).fetchEvidence(chapterUrl),
     () => createNovelPingExtractor({ fetch: async () => new Response('not html', { headers: { 'content-type': 'text/html; charset' } }) }).fetchEvidence(chapterUrl),
+    () => createNovelPingExtractor({ fetch: async () => new Response('not html', { headers: { 'content-type': 'text/html\u000b; charset=utf-8' } }) }).fetchEvidence(chapterUrl),
     () => createNovelPingExtractor({ fetch: async () => htmlResponse('x'.repeat(20)), maxBodyBytes: 10 }).fetchEvidence(chapterUrl),
     () => createNovelPingExtractor({ fetch: async () => htmlResponse('<h1 data-chapter-number="2491" data-chapter-title>Title</h1>') }).fetchEvidence(chapterUrl)
   ];
