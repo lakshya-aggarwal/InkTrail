@@ -90,3 +90,10 @@ test('accepts text/html with valid parameters', async () => {
   });
   assert.equal((await extractor.fetchEvidence(chapterUrl)).chapterNumber, 2491);
 });
+
+test('accepts text/html with tab optional whitespace', async () => {
+  const extractor = createNovelPingExtractor({
+    fetch: async () => new Response(await chapterHtml(), { headers: { 'content-type': 'text/html\t;\tcharset=utf-8' } })
+  });
+  assert.equal((await extractor.fetchEvidence(chapterUrl)).chapterNumber, 2491);
+});
