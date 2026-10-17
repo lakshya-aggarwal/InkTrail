@@ -1,5 +1,5 @@
 import { ConflictError, ValidationError } from '../domain/errors.js';
-import { canonicalizeChapterTarget } from './job-repository.js';
+import { canonicalizeChapterTarget, canonicalizeSourceCatalogTarget } from './job-repository.js';
 
 const EXPORT_LOCK_RETRY_DELAYS_MS = [10, 25, 50];
 
@@ -84,6 +84,26 @@ export function createJobService({ database, jobs, exports, runner }) {
         return { job: jobResource(existing), created: false };
       }
       const job = jobs.createTranslationJob({ novelId, target, idempotencyKey });
+      await runner.wake();
+      return { job: jobResource(job), created: true };
+    },
+
+    async createSourceImportCatalogJob(input, idempotencyKey = null) {
+      const { novelId, type, target } = requireObject(input);
+      if (type !== 'source_import_catalog') throw new ValidationError('job type must be source_import_catalog');
+      const canonicalTarget = canonicalizeSourceCatalogTarget(target);
+      const existing = jobs.listJobs(novelId).find((job) => {
+        if (job.type !== type) return false;
+        if (idempotencyKey !== null) return job.idempotencyKey === idempotencyKey;
+        return active(job) && canonicalizeSourceCatalogTarget(job.target).targetHash === canonicalTarget.targetHash;
+      });
+      if (existing) {
+        if (canonicalizeSourceCatalogTarget(existing.target).targetHash !== canonicalTarget.targetHash) {
+          throw new ConflictError('idempotency key was already used for a different job');
+        }
+        return { job: jobResource(existing), created: false };
+      }
+      const job = jobs.createSourceImportCatalogJob({ novelId, target, idempotencyKey });
       await runner.wake();
       return { job: jobResource(job), created: true };
     },

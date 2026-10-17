@@ -151,6 +151,81 @@ paths:
           $ref: '#/components/responses/SourceFetchFailed'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/v1/novels/{novelId}/source-catalogs:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+    get:
+      operationId: listSourceCatalogs
+      summary: List immutable Kujiang source catalogs with import progress
+      responses:
+        '200':
+          description: Source catalog snapshots, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SourceCatalog'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: discoverSourceCatalog
+      summary: Discover and persist one canonical Kujiang catalog without importing chapters
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceCatalogDiscoveryInput'
+            example:
+              bookUrl: https://www.kujiang.com/book/9
+      responses:
+        '200':
+          description: Equivalent existing source catalog returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceCatalog'
+        '201':
+          description: Source catalog discovered and persisted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceCatalog'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '502':
+          $ref: '#/components/responses/SourceFetchFailed'
+  /api/v1/novels/{novelId}/source-catalogs/{catalogId}:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+      - $ref: '#/components/parameters/CatalogId'
+    get:
+      operationId: getSourceCatalog
+      summary: Get bounded ordered source catalog metadata
+      responses:
+        '200':
+          description: Source catalog metadata and ordered entries without chapter bodies
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceCatalogDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/v1/novels/{novelId}/chapters/{chapterNumber}:
     parameters:
       - $ref: '#/components/parameters/NovelId'
@@ -347,7 +422,7 @@ paths:
           $ref: '#/components/responses/NotFound'
     post:
       operationId: createTranslationJob
-      summary: Queue sourced chapters for durable translation
+      summary: Queue sourced chapters for durable translation or one catalog for source-only import
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -355,7 +430,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateTranslationJobInput'
+              $ref: '#/components/schemas/CreateJobInput'
       responses:
         '200':
           description: Compatible existing job returned for deduplication or idempotency replay
@@ -585,6 +660,13 @@ components:
       schema:
         type: string
         format: uuid
+    CatalogId:
+      name: catalogId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -686,6 +768,70 @@ components:
         chapterNumber:
           type: integer
           minimum: 1
+    SourceCatalogDiscoveryInput:
+      type: object
+      additionalProperties: false
+      required: [bookUrl]
+      properties:
+        bookUrl:
+          type: string
+          format: uri
+          description: Canonical HTTPS Kujiang book URL using the exact `/book/<positive-book-id>` path without a query string or fragment.
+          pattern: '^https://www\.kujiang\.com/book/[1-9][0-9]*$'
+          example: https://www.kujiang.com/book/9
+    SourceCatalog:
+      type: object
+      required: [id, site, canonicalBookUrl, entryCount, importedEntryCount, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        site:
+          type: string
+          enum: [kujiang]
+        canonicalBookUrl:
+          type: string
+          format: uri
+        entryCount:
+          type: integer
+          minimum: 1
+        importedEntryCount:
+          type: integer
+          minimum: 0
+        createdAt:
+          type: string
+          format: date-time
+    SourceCatalogEntry:
+      type: object
+      required: [id, ordinal, externalChapterId, sourceUrl, sourceTitle, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ordinal:
+          type: integer
+          minimum: 1
+        externalChapterId:
+          type: string
+        sourceUrl:
+          type: string
+          format: uri
+        sourceTitle:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    SourceCatalogDetail:
+      type: object
+      required: [catalog, entries]
+      properties:
+        catalog:
+          $ref: '#/components/schemas/SourceCatalog'
+        entries:
+          type: array
+          maxItems: 5000
+          items:
+            $ref: '#/components/schemas/SourceCatalogEntry'
     SetReadingProgressInput:
       type: object
       required: [chapterNumber]
@@ -1071,6 +1217,29 @@ components:
           enum: [translate_chapters]
         target:
           $ref: '#/components/schemas/ChapterSelection'
+    CreateSourceImportCatalogJobInput:
+      type: object
+      additionalProperties: false
+      required: [novelId, type, target]
+      properties:
+        novelId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [source_import_catalog]
+        target:
+          type: object
+          additionalProperties: false
+          required: [catalogId]
+          properties:
+            catalogId:
+              type: string
+              format: uuid
+    CreateJobInput:
+      oneOf:
+        - $ref: '#/components/schemas/CreateTranslationJobInput'
+        - $ref: '#/components/schemas/CreateSourceImportCatalogJobInput'
     Job:
       type: object
       required: [id, novelId, type, target, state, priority, attemptCount, createdAt, updatedAt]
@@ -1083,7 +1252,7 @@ components:
           format: uuid
         type:
           type: string
-          enum: [translate_chapters, build_epub]
+          enum: [translate_chapters, build_epub, source_import_catalog]
         target:
           oneOf:
             - $ref: '#/components/schemas/ChapterSelection'
@@ -1091,6 +1260,12 @@ components:
               required: [exportId]
               properties:
                 exportId:
+                  type: string
+                  format: uuid
+            - type: object
+              required: [catalogId]
+              properties:
+                catalogId:
                   type: string
                   format: uuid
         state:
@@ -1106,6 +1281,10 @@ components:
           format: date-time
           nullable: true
         currentChapterId:
+          type: string
+          format: uuid
+          nullable: true
+        currentCatalogEntryId:
           type: string
           format: uuid
           nullable: true
@@ -1142,6 +1321,10 @@ components:
           type: string
           format: uuid
           nullable: true
+        catalogEntryId:
+          type: string
+          format: uuid
+          nullable: true
         attemptNumber:
           type: integer
           minimum: 1
@@ -1175,6 +1358,10 @@ components:
           type: string
           format: uuid
         chapterId:
+          type: string
+          format: uuid
+          nullable: true
+        catalogEntryId:
           type: string
           format: uuid
           nullable: true

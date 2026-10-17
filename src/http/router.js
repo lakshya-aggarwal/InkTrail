@@ -92,6 +92,38 @@ function idempotencyKey(request) {
   return value.trim();
 }
 
+function sourceCatalogInput(input) {
+  if (Object.keys(input).length !== 1 || !Object.hasOwn(input, 'bookUrl')) {
+    throw new ValidationError('input must contain only bookUrl');
+  }
+  return input;
+}
+
+function sourceCatalogSummary(catalog) {
+  return {
+    id: catalog.id,
+    site: catalog.site,
+    canonicalBookUrl: catalog.canonicalBookUrl,
+    entryCount: catalog.entryCount,
+    importedEntryCount: catalog.importedEntryCount ?? 0,
+    createdAt: catalog.createdAt
+  };
+}
+
+function sourceCatalogDetail(snapshot, summary) {
+  return {
+    catalog: sourceCatalogSummary(summary),
+    entries: snapshot.entries.map(({ id, ordinal, externalChapterId, sourceUrl, sourceTitle, createdAt }) => ({
+      id,
+      ordinal,
+      externalChapterId,
+      sourceUrl,
+      sourceTitle,
+      createdAt
+    }))
+  };
+}
+
 async function writeDownload(response, download, exportId) {
   await new Promise((resolve, reject) => {
     download.stream.once('error', reject);
@@ -106,7 +138,7 @@ async function writeDownload(response, download, exportId) {
   });
 }
 
-export function createRouter({ libraryService, translationService, feedbackVerificationService, jobService, epubBuilder, repositories }) {
+export function createRouter({ libraryService, translationService, feedbackVerificationService, jobService, sourceCatalogService, epubBuilder, repositories }) {
   return async function router(request, response) {
     const { method } = request;
     const { pathname, searchParams } = new URL(request.url ?? '/', 'http://localhost');
@@ -131,7 +163,10 @@ export function createRouter({ libraryService, translationService, feedbackVerif
       }
       if (method === 'POST') {
         await handle(response, undefined, async () => {
-          const result = await jobService.createTranslationJob(await readObject(request), idempotencyKey(request));
+          const input = await readObject(request);
+          const result = input.type === 'source_import_catalog'
+            ? await jobService.createSourceImportCatalogJob(input, idempotencyKey(request))
+            : await jobService.createTranslationJob(input, idempotencyKey(request));
           writeJson(response, result.created ? 201 : 200, result.job);
         });
         return;
@@ -164,6 +199,43 @@ export function createRouter({ libraryService, translationService, feedbackVerif
       const novelId = decodePathParameter(response, novelMatch[1]);
       if (novelId === undefined) return;
       await handle(response, novelId, async () => writeJson(response, 200, libraryService.getNovel(novelId)));
+      return;
+    }
+
+    const sourceCatalogCollectionMatch = /^\/api\/v1\/novels\/([^/]+)\/source-catalogs$/.exec(pathname);
+    if (sourceCatalogCollectionMatch) {
+      const novelId = decodePathParameter(response, sourceCatalogCollectionMatch[1]);
+      if (novelId === undefined) return;
+      if (method === 'GET') {
+        await handle(response, novelId, async () => writeJson(response, 200, {
+          items: repositories.catalogs.listSnapshotsWithProgress(novelId).map(sourceCatalogSummary)
+        }));
+        return;
+      }
+      if (method === 'POST') {
+        await handle(response, novelId, async () => {
+          const result = await sourceCatalogService.discoverCatalogSnapshot({
+            novelId,
+            ...sourceCatalogInput(await readObject(request))
+          });
+          const summary = repositories.catalogs.listSnapshotsWithProgress(novelId).find((catalog) => catalog.id === result.snapshot.catalog.id);
+          writeJson(response, result.created ? 201 : 200, sourceCatalogSummary(summary));
+        });
+        return;
+      }
+    }
+
+    const sourceCatalogMatch = /^\/api\/v1\/novels\/([^/]+)\/source-catalogs\/([^/]+)$/.exec(pathname);
+    if (method === 'GET' && sourceCatalogMatch) {
+      const novelId = decodePathParameter(response, sourceCatalogMatch[1]);
+      if (novelId === undefined) return;
+      const catalogId = decodePathParameter(response, sourceCatalogMatch[2]);
+      if (catalogId === undefined) return;
+      await handle(response, catalogId, async () => {
+        const snapshot = repositories.catalogs.getSnapshot(novelId, catalogId);
+        const summary = repositories.catalogs.listSnapshotsWithProgress(novelId).find((catalog) => catalog.id === catalogId);
+        writeJson(response, 200, sourceCatalogDetail(snapshot, summary));
+      });
       return;
     }
 

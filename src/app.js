@@ -20,6 +20,8 @@ import { createLibraryService } from './services/library-service.js';
 import { createAdapterRegistry } from './sources/adapter-registry.js';
 import { createKujiangAdapter } from './sources/kujiang-adapter.js';
 import { createSourceImportService } from './sources/source-import-service.js';
+import { createSourceCatalogRepository } from './sources/source-catalog-repository.js';
+import { createSourceCatalogService } from './sources/source-catalog-service.js';
 import { createSourceRepository } from './sources/source-repository.js';
 import { createOllamaTranslationProvider } from './translation/ollama-translation-provider.js';
 import { createQualityFindingRepository } from './translation/quality-finding-repository.js';
@@ -58,7 +60,8 @@ export async function createApp({ databasePath, exportRoot = join(dirname(databa
     memory: createMemoryRepository(database, clock),
     feedback: createFeedbackRepository(database, clock),
     jobs: createJobRepository(database, clock),
-    exports: createExportRepository(database, clock)
+    exports: createExportRepository(database, clock),
+    catalogs: createSourceCatalogRepository(database, clock)
   };
   const exports = createExportRoot({ exportRoot });
   try {
@@ -67,12 +70,15 @@ export async function createApp({ databasePath, exportRoot = join(dirname(databa
     database.close();
     throw error;
   }
+  const kujiangAdapter = createKujiangAdapter({ fetch });
+  const adapterRegistry = createAdapterRegistry([kujiangAdapter]);
   const sourceImportService = createSourceImportService({
     database,
     repositories,
-    adapterRegistry: createAdapterRegistry([createKujiangAdapter({ fetch })]),
+    adapterRegistry,
     clock
   });
+  const sourceCatalogService = createSourceCatalogService({ database, repositories, catalogAdapter: kujiangAdapter });
   const translationService = createTranslationService({ database, repositories, provider: translationProvider });
   const epubBuilder = createEpubBuilder({ exports: repositories.exports, exportRoot: exports, writeArchive: archiveWriter });
   const runner = createTranslationJobRunner({
@@ -89,6 +95,7 @@ export async function createApp({ databasePath, exportRoot = join(dirname(databa
     translationService,
     feedbackVerificationService: createFeedbackVerificationService({ database, repositories }),
     jobService: createJobService({ database, jobs: repositories.jobs, exports: repositories.exports, runner }),
+    sourceCatalogService,
     epubBuilder,
     repositories
   });

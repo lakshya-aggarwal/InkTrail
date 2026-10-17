@@ -7,10 +7,20 @@ import { createApp } from '../src/app.js';
 
 const sourceUrl = /^https:\/\/www\.kujiang\.com\/book\/[1-9]\d*\/[1-9]\d*$/;
 const failedSourceUrl = 'https://www.kujiang.com/book/9/906597';
+const catalogUrl = 'https://www.kujiang.com/book/9/catalog';
 const fixturePath = new URL('../test/fixtures/kujiang/chapter.html', import.meta.url);
+const catalogFixturePath = new URL('../test/fixtures/kujiang/catalog.html', import.meta.url);
 
 async function fixtureFetch(url) {
   const value = String(url);
+  if (value === catalogUrl) {
+    return new Response(await readFile(catalogFixturePath, 'utf8'), {
+      headers: { 'content-type': 'text/html; charset=utf-8' }
+    });
+  }
+  if (value === failedSourceUrl) {
+    throw new Error('fixture source fetch failure');
+  }
   const chapterId = new URL(value).pathname.split('/').at(-1);
   const fixtureMode = chapterId.startsWith('7') ? chapterId.at(-1) : null;
   if (fixtureMode === '8' || fixtureMode === '9') {
@@ -23,9 +33,6 @@ async function fixtureFetch(url) {
     return new Response(await readFile(fixturePath, 'utf8'), {
       headers: { 'content-type': 'text/html; charset=utf-8' }
     });
-  }
-  if (url === failedSourceUrl) {
-    throw new Error('fixture source fetch failure');
   }
   throw new Error('fixture source URL is not configured');
 }

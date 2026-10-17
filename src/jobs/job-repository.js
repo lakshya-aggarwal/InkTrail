@@ -60,6 +60,14 @@ export function canonicalizeChapterTarget(value) {
   throw new ValidationError('target must be a chapter range or chapterNumbers');
 }
 
+export function canonicalizeSourceCatalogTarget(value) {
+  const target = requireObject(value, 'target');
+  if (Object.keys(target).length !== 1 || !Object.hasOwn(target, 'catalogId')) throw new ValidationError('target must contain only catalogId');
+  const catalogId = requireId(target.catalogId, 'catalogId');
+  const targetJson = JSON.stringify({ catalogId });
+  return { catalogId, targetJson, targetHash: hash(targetJson) };
+}
+
 function toJob(row) {
   return {
     id: row.id,
@@ -401,13 +409,7 @@ export function createJobRepository(database, clock) {
           const targetJson = JSON.stringify({ exportId });
           return { targetJson, targetHash: hash(targetJson), exportId };
         })()
-        : (() => {
-          const sourceTarget = requireObject(target, 'target');
-          if (Object.keys(sourceTarget).length !== 1 || !Object.hasOwn(sourceTarget, 'catalogId')) throw new ValidationError('target must contain only catalogId');
-          const catalogId = requireId(sourceTarget.catalogId, 'catalogId');
-          const targetJson = JSON.stringify({ catalogId });
-          return { targetJson, targetHash: hash(targetJson), catalogId };
-        })();
+        : canonicalizeSourceCatalogTarget(target);
     const normalizedKey = idempotencyKey === null || idempotencyKey === undefined ? null : requireId(idempotencyKey, 'idempotencyKey');
 
     return transaction(() => {

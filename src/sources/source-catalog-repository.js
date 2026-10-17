@@ -25,6 +25,7 @@ function toCatalog(row) {
     canonicalBookUrl: row.canonical_book_url,
     contentSha256: row.content_sha256,
     entryCount: row.entry_count,
+    ...(Object.hasOwn(row, 'imported_entry_count') ? { importedEntryCount: row.imported_entry_count } : {}),
     createdAt: row.created_at
   };
 }
@@ -76,6 +77,17 @@ export function createSourceCatalogRepository(database, clock) {
   const catalogInNovel = database.prepare('select * from source_catalogs where id = ? and novel_id = ?');
   const entryInCatalog = database.prepare('select * from source_catalog_entries where id = ? and catalog_id = ? and novel_id = ?');
   const entriesForCatalog = database.prepare('select * from source_catalog_entries where catalog_id = ? order by ordinal');
+  const catalogsWithProgress = database.prepare(`
+    select source_catalogs.*, count(distinct case when chapter_sources.id is not null then source_catalog_entries.id end) as imported_entry_count
+    from source_catalogs
+    left join source_catalog_entries on source_catalog_entries.catalog_id = source_catalogs.id
+    left join chapter_sources on chapter_sources.novel_id = source_catalogs.novel_id
+      and chapter_sources.novel_source_id = source_catalogs.novel_source_id
+      and chapter_sources.normalized_url = source_catalog_entries.normalized_url
+    where source_catalogs.novel_id = ?
+    group by source_catalogs.id
+    order by source_catalogs.created_at desc, source_catalogs.id desc
+  `);
   const insertCatalog = database.prepare(`
     insert into source_catalogs (
       id, novel_id, novel_source_id, site, canonical_book_url, content_sha256, entry_count, created_at
@@ -151,6 +163,12 @@ export function createSourceCatalogRepository(database, clock) {
 
     createOrGetSnapshotInTransaction,
 
+    findSnapshotByIdentity({ novelId, novelSourceId, contentSha256 }) {
+      const catalog = catalogByIdentity.get(requireText(novelSourceId, 'novelSourceId'), requireSha256(contentSha256));
+      if (!catalog || catalog.novel_id !== requireText(novelId, 'novelId')) return null;
+      return getSnapshot(novelId, catalog.id);
+    },
+
     getSnapshot,
 
     getEntry(input) {
@@ -164,6 +182,12 @@ export function createSourceCatalogRepository(database, clock) {
       const id = requireText(novelId, 'novelId');
       if (!novelExists.get(id)) throw new NotFoundError('novel not found');
       return database.prepare('select * from source_catalogs where novel_id = ? order by created_at desc, id desc').all(id).map(toCatalog);
+    },
+
+    listSnapshotsWithProgress(novelId) {
+      const id = requireText(novelId, 'novelId');
+      if (!novelExists.get(id)) throw new NotFoundError('novel not found');
+      return catalogsWithProgress.all(id).map(toCatalog);
     }
   };
 }
