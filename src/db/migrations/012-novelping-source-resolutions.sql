@@ -151,9 +151,12 @@ for each row when not exists (
     and source_resolution_candidates.novel_id = new.novel_id
     and source_resolution_candidates.catalog_id = new.catalog_id
     and novel_sources.novel_id = new.novel_id
+    and source_resolution_candidates.site = novel_sources.site
     and source_resolution_candidates.canonical_source_identity = novel_sources.normalized_url
     and source_catalogs.novel_id = new.novel_id
     and source_catalogs.novel_source_id = new.novel_source_id
+    and source_resolution_candidates.site = source_catalogs.site
+    and source_resolution_candidates.content_sha256 = source_catalogs.content_sha256
     and source_catalog_entries.catalog_id = new.catalog_id
     and source_catalog_entries.novel_id = new.novel_id
     and source_catalog_entries.ordinal = source_resolution_candidates.catalog_entry_ordinal

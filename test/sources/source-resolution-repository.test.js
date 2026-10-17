@@ -138,6 +138,64 @@ test('atomically persists accepted references only for a matching source catalog
   assert.throws(() => database.prepare("update novel_source_resolutions set catalog_entry_id = 'changed' where id = ?").run(accepted.id), /immutable/);
 });
 
+test('binds accepted candidate site and catalog hash to the accepted source catalog', (t) => {
+  const { database, novels, sources, catalogs, resolutions } = repositories();
+  t.after(() => database.close());
+  const novel = novels.createNovel({ id: 'novel-a', title: 'First' });
+  const source = sources.createOrGetNovelSource(sourceInput(novel.id));
+  const snapshot = catalogs.createOrGetSnapshot(snapshotInput(novel.id, source.id));
+
+  for (const mismatch of [
+    { id: 'attempt-hash', candidate: { contentSha256: digest('b') } },
+    { id: 'attempt-site', candidate: { site: 'novelping' } }
+  ]) {
+    assert.throws(() => resolutions.withinTransaction(() => {
+      const created = resolutions.createOrGetTerminalAttemptInTransaction(attemptInput({
+        id: mismatch.id,
+        novelId: novel.id,
+        evidenceHash: mismatch.id === 'attempt-hash' ? digest('b') : digest('c'),
+        canonicalNovelPingUrl: `https://novelping.com/book/return-of-the-war-god/${mismatch.id}`,
+        state: 'resolved',
+        errorCode: undefined,
+        selectedCandidateId: 'candidate-a',
+        candidates: [{ ...candidate(snapshot.catalog.id), ...mismatch.candidate }]
+      }));
+      resolutions.createAcceptedResolutionInTransaction({
+        novelId: novel.id,
+        attemptId: created.attempt.id,
+        candidateId: 'candidate-a',
+        novelSourceId: source.id,
+        catalogId: snapshot.catalog.id,
+        catalogEntryId: snapshot.entries[0].id
+      });
+    }), ConflictError);
+  }
+
+  resolutions.withinTransaction(() => {
+    const created = resolutions.createOrGetTerminalAttemptInTransaction(attemptInput({
+      id: 'attempt-valid',
+      novelId: novel.id,
+      evidenceHash: digest('d'),
+      canonicalNovelPingUrl: 'https://novelping.com/book/return-of-the-war-god/attempt-valid',
+      state: 'resolved',
+      errorCode: undefined,
+      selectedCandidateId: 'candidate-a',
+      candidates: [candidate(snapshot.catalog.id)]
+    }));
+    resolutions.createAcceptedResolutionInTransaction({
+      novelId: novel.id,
+      attemptId: created.attempt.id,
+      candidateId: 'candidate-a',
+      novelSourceId: source.id,
+      catalogId: snapshot.catalog.id,
+      catalogEntryId: snapshot.entries[0].id
+    });
+  });
+
+  assert.equal(resolutions.listResolutions(novel.id).length, 1);
+  assert.equal(database.prepare('select count(*) as count from source_resolution_attempts').get().count, 1);
+});
+
 test('rejects catalog observations outside accepted attempts and source collisions without replacement', (t) => {
   const { database, novels, sources, catalogs, resolutions } = repositories();
   t.after(() => database.close());
