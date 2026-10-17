@@ -44,6 +44,119 @@ async function seedSourcedChapters(request, { title = 'Sourced novel', sourceUrl
   return novelBody.id;
 }
 
+async function seedSourcedNovel(request, { title, sourceUrl }) {
+  return seedSourcedChapters(request, { title, sourceUrls: [sourceUrl] });
+}
+
+async function seedSourceWorkspacePair(request, testInfo, { sourceBookId, title }) {
+  const sourceNovelId = await seedSourcedNovel(request, {
+    title: `${title} source`,
+    sourceUrl: `https://www.kujiang.com/book/${sourceBookId}/${sourceBookId}7`
+  });
+  const targetNovelId = await seedSourcedNovel(request, {
+    title: `${title} target`,
+    sourceUrl: `https://www.kujiang.com/book/${sourceBookId}8/${sourceBookId}9`
+  });
+  return { sourceNovelId, targetNovelId };
+}
+
+async function discoverSourceCatalog(request, novelId, bookId) {
+  const response = await request.post(`/api/v1/novels/${novelId}/source-catalogs`, {
+    data: { bookUrl: `https://www.kujiang.com/book/${bookId}` }
+  });
+  expect(response.ok(), await response.text()).toBeTruthy();
+}
+
+async function createSourceImportJob(request, novelId) {
+  const catalogs = await request.get(`/api/v1/novels/${novelId}/source-catalogs`);
+  const catalog = (await catalogs.json()).items[0];
+  const created = await request.post('/api/v1/jobs', {
+    data: { novelId, type: 'source_import_catalog', target: { catalogId: catalog.id } }
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  return created.json();
+}
+
+async function settleWorkspaceAction(page) {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+}
+
+async function switchToFreshSourceWorkspace(page, { targetNovelId }) {
+  const catalogsLoaded = page.waitForResponse((response) => (
+    response.request().method() === 'GET'
+    && new URL(response.url()).pathname === `/api/v1/novels/${targetNovelId}/source-catalogs`
+  ));
+  await page.locator(`[data-novel-id="${targetNovelId}"]`).click();
+  await catalogsLoaded;
+  await settleWorkspaceAction(page);
+  await expect(page).toHaveURL(new RegExp(`\\?novel=${targetNovelId}&chapter=1$`));
+  await expect(page.getByLabel('Add Kujiang source')).toBeEnabled();
+  await expect(page.locator('#workspace-status')).toHaveText('');
+  await expect(page.locator('#source-catalog')).toBeHidden();
+  await expect(page.locator('#source-import-job')).toBeHidden();
+}
+
+async function holdWorkspaceAction(page, predicate, { errorMessage } = {}) {
+  let resolveArrived;
+  let releaseResponse;
+  let handled = false;
+  const arrived = new Promise((resolve) => { resolveArrived = resolve; });
+  const released = new Promise((resolve) => { releaseResponse = resolve; });
+  const handler = async (route) => {
+    if (handled || !predicate(route.request())) return route.continue();
+    handled = true;
+    if (errorMessage) {
+      resolveArrived({ status: 502 });
+      await released;
+      await route.fulfill({
+        status: 502,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { message: errorMessage } })
+      });
+      return;
+    }
+    const response = await route.fetch();
+    resolveArrived({ status: response.status() });
+    await released;
+    await route.fulfill({ response });
+  };
+  await page.route('**/api/v1/**', handler);
+  return {
+    arrived,
+    release: releaseResponse,
+    async dispose() {
+      await page.unroute('**/api/v1/**', handler);
+    }
+  };
+}
+
+function isWorkspaceRefresh(request, novelId) {
+  const url = new URL(request.url());
+  return request.method() === 'GET'
+    && url.searchParams.get('novelId') === novelId
+    && url.pathname === '/api/v1/jobs';
+}
+
+async function expectStaleWorkspaceActionToLeaveTargetUntouched(page, heldAction, targetNovelId) {
+  const refreshes = [];
+  const observe = (request) => { if (isWorkspaceRefresh(request, targetNovelId)) refreshes.push(request.url()); };
+  page.on('request', observe);
+  try {
+    heldAction.release();
+    await settleWorkspaceAction(page);
+    await expect(page.locator('#workspace-status')).toHaveText('');
+    await expect(page.locator('#source-catalog')).toBeHidden();
+    await expect(page.locator('#source-import-job')).toBeHidden();
+    await expect(page.getByLabel('Add Kujiang source')).toBeEnabled();
+    await expect(page.locator('#import-source-catalog')).toBeEnabled();
+    await expect(page.locator('#source-import-job-control')).toBeEnabled();
+    expect(refreshes).toEqual([]);
+  } finally {
+    page.off('request', observe);
+    await heldAction.dispose();
+  }
+}
+
 function fixtureChapterUrl(testInfo, sourceId) {
   const projectOffset = testInfo.project.name === 'desktop-chromium' ? 910000 : 920000;
   const externalId = projectOffset + sourceId;
@@ -55,6 +168,18 @@ function fixtureControlChapterUrl(testInfo, sourceId, mode) {
   const externalNovelId = projectOffset + sourceId;
   const externalChapterId = `7${externalNovelId}${sourceId}${mode}`;
   return `https://www.kujiang.com/book/${externalNovelId}/${externalChapterId}`;
+}
+
+function fixtureCatalogBookId(prefix, identity) {
+  const suffixes = {
+    completion: '1',
+    error: '2',
+    'pause-completion': '3',
+    'pause-error': '4',
+    'resume-completion': '5',
+    'resume-error': '6'
+  };
+  return `${prefix}${suffixes[identity]}`;
 }
 
 async function readProgress(request, novelId) {
@@ -344,52 +469,88 @@ test('workspace discovers and controls a source catalog without interrupting rea
   await expect(page.locator('#translation-workspace')).toBeHidden();
 });
 
-test('stale source discovery completion cannot update a newer sourced workspace', async ({ page }, testInfo) => {
-  const bookId = testInfo.project.name === 'desktop-chromium' ? '93' : '94';
-  const chapterId = `${testInfo.workerIndex + 1}931`;
-  const novel = await page.request.post('/api/v1/novels', { data: { title: 'Stale source workspace novel' } });
-  const novelBody = await novel.json();
-  for (const chapterNumber of [10, 11]) {
-    const sourced = await page.request.post(`/api/v1/novels/${novelBody.id}/source-chapters`, {
-      data: { sourceUrl: `https://www.kujiang.com/book/${bookId}/${chapterId + chapterNumber}`, chapterNumber }
+for (const [name, sourceBookPrefix, errorMessage] of [
+  ['completion', ['93', '94'], undefined],
+  ['error', ['95', '96'], 'Fixture catalog fetch failure']
+]) {
+  test(`stale source discovery ${name} cannot update a newer sourced workspace`, async ({ page }, testInfo) => {
+    const sourceBookId = fixtureCatalogBookId(sourceBookPrefix[testInfo.project.name === 'desktop-chromium' ? 0 : 1], name);
+    const { sourceNovelId, targetNovelId } = await seedSourceWorkspacePair(page.request, testInfo, {
+      sourceBookId,
+      title: `Stale source discovery ${name}`
     });
-    expect(sourced.ok(), await sourced.text()).toBeTruthy();
-  }
-  await page.goto(`/?novel=${novelBody.id}&chapter=10`);
-  await expect(page.getByLabel('Add Kujiang source')).toBeVisible();
+    await page.goto(`/?novel=${sourceNovelId}&chapter=1`);
+    await expect(page.getByLabel('Add Kujiang source')).toBeVisible();
+    const held = await holdWorkspaceAction(
+      page,
+      (request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/source-catalogs'),
+      { errorMessage }
+    );
 
-  const discovery = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/source-catalogs'));
-  await page.getByLabel('Add Kujiang source').fill(`https://www.kujiang.com/book/${bookId}`);
-  await page.getByRole('button', { name: 'Discover source' }).click();
-  await page.getByRole('button', { name: 'Next chapter' }).last().click();
-  await expect(page).toHaveURL(new RegExp(`\\?novel=${novelBody.id}&chapter=11$`));
-  await expect(page.getByLabel('Add Kujiang source')).toBeEnabled();
-  expect((await discovery).status()).toBe(201);
-  await expect(page.locator('#workspace-status')).toHaveText('');
-  await expect(page.locator('#source-catalog')).toBeHidden();
-});
+    await page.getByLabel('Add Kujiang source').fill(`https://www.kujiang.com/book/${sourceBookId}`);
+    await page.getByRole('button', { name: 'Discover source' }).click();
+    expect((await held.arrived).status).toBe(errorMessage ? 502 : 201);
+    await switchToFreshSourceWorkspace(page, { targetNovelId });
+    await expectStaleWorkspaceActionToLeaveTargetUntouched(page, held, targetNovelId);
+  });
+}
 
-test('stale source discovery error cannot update a newer sourced workspace', async ({ page }, testInfo) => {
-  const bookId = testInfo.project.name === 'desktop-chromium' ? '95' : '96';
-  const chapterId = `${testInfo.workerIndex + 1}951`;
-  const novel = await page.request.post('/api/v1/novels', { data: { title: 'Stale source error workspace novel' } });
-  const novelBody = await novel.json();
-  for (const chapterNumber of [10, 11]) {
-    const sourced = await page.request.post(`/api/v1/novels/${novelBody.id}/source-chapters`, {
-      data: { sourceUrl: `https://www.kujiang.com/book/${bookId}/${chapterId + chapterNumber}`, chapterNumber }
+for (const [name, errorMessage] of [
+  ['completion', undefined],
+  ['error', 'Fixture source import request failed']
+]) {
+  test(`stale source import ${name} cannot update a newer sourced workspace`, async ({ page }, testInfo) => {
+    const sourceBookId = fixtureCatalogBookId(testInfo.project.name === 'desktop-chromium' ? '91' : '92', name);
+    const { sourceNovelId, targetNovelId } = await seedSourceWorkspacePair(page.request, testInfo, {
+      sourceBookId,
+      title: `Stale source import ${name}`
     });
-    expect(sourced.ok(), await sourced.text()).toBeTruthy();
-  }
-  await page.goto(`/?novel=${novelBody.id}&chapter=10`);
-  await expect(page.getByLabel('Add Kujiang source')).toBeVisible();
+    await discoverSourceCatalog(page.request, sourceNovelId, sourceBookId);
+    await page.goto(`/?novel=${sourceNovelId}&chapter=1`);
+    await expect(page.getByRole('button', { name: 'Import source chapters' })).toBeVisible();
+    const held = await holdWorkspaceAction(
+      page,
+      (request) => request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/jobs',
+      { errorMessage }
+    );
 
-  const discovery = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/source-catalogs'));
-  await page.getByLabel('Add Kujiang source').fill(`https://www.kujiang.com/book/${bookId}`);
-  await page.getByRole('button', { name: 'Discover source' }).click();
-  await page.getByRole('button', { name: 'Next chapter' }).last().click();
-  await expect(page).toHaveURL(new RegExp(`\\?novel=${novelBody.id}&chapter=11$`));
-  await expect(page.getByLabel('Add Kujiang source')).toBeEnabled();
-  expect((await discovery).status()).toBe(502);
-  await expect(page.locator('#workspace-status')).toHaveText('');
-  await expect(page.locator('#source-catalog')).toBeHidden();
-});
+    await page.getByRole('button', { name: 'Import source chapters' }).click();
+    expect((await held.arrived).status).toBe(errorMessage ? 502 : 201);
+    await switchToFreshSourceWorkspace(page, { targetNovelId });
+    await expectStaleWorkspaceActionToLeaveTargetUntouched(page, held, targetNovelId);
+  });
+}
+
+for (const action of ['pause', 'resume']) {
+  for (const [name, errorMessage] of [
+    ['completion', undefined],
+    ['error', `Fixture source import ${action} failed`]
+  ]) {
+    test(`stale source import ${action} ${name} cannot update a newer sourced workspace`, async ({ page }, testInfo) => {
+      const sourceBookId = fixtureCatalogBookId(testInfo.project.name === 'desktop-chromium' ? '91' : '92', `${action}-${name}`);
+      const { sourceNovelId, targetNovelId } = await seedSourceWorkspacePair(page.request, testInfo, {
+        sourceBookId,
+        title: `Stale source import ${action} ${name}`
+      });
+      await discoverSourceCatalog(page.request, sourceNovelId, sourceBookId);
+      const job = await createSourceImportJob(page.request, sourceNovelId);
+      if (action === 'resume') {
+        const paused = await page.request.post(`/api/v1/jobs/${job.id}/pause?novelId=${sourceNovelId}`);
+        expect(paused.ok(), await paused.text()).toBeTruthy();
+      }
+      await page.goto(`/?novel=${sourceNovelId}&chapter=1`);
+      const controlName = action === 'pause' ? 'Pause source import' : 'Resume source import';
+      await expect(page.getByRole('button', { name: controlName })).toBeVisible();
+      const held = await holdWorkspaceAction(
+        page,
+        (request) => request.method() === 'POST' && new URL(request.url()).pathname === `/api/v1/jobs/${job.id}/${action}`,
+        { errorMessage }
+      );
+
+      await page.getByRole('button', { name: controlName }).click();
+      expect((await held.arrived).status).toBe(errorMessage ? 502 : 200);
+      await switchToFreshSourceWorkspace(page, { targetNovelId });
+      await expectStaleWorkspaceActionToLeaveTargetUntouched(page, held, targetNovelId);
+    });
+  }
+}

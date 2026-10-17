@@ -18,8 +18,8 @@ async function fixtureFetch(url) {
       headers: { 'content-type': 'text/html; charset=utf-8' }
     });
   }
-  if (/^https:\/\/www\.kujiang\.com\/book\/(91|92|93|94)\/catalog$/.test(value)) {
-    if (/\/(93|94)\/catalog$/.test(value)) await new Promise((resolve) => setTimeout(resolve, 2_500));
+  if (/^https:\/\/www\.kujiang\.com\/book\/(91|92|93|94)\d*\/catalog$/.test(value)) {
+    if (/\/(93|94)\d*\/catalog$/.test(value)) await new Promise((resolve) => setTimeout(resolve, 2_500));
     const bookId = new URL(value).pathname.split('/')[2];
     return new Response(`<section class="kjsection-catalog"><a href="/book/${bookId}/7918">Fixture slow chapter</a></section>`, {
       headers: { 'content-type': 'text/html; charset=utf-8' }
@@ -28,7 +28,7 @@ async function fixtureFetch(url) {
   if (value === failedSourceUrl) {
     throw new Error('fixture source fetch failure');
   }
-  if (/^https:\/\/www\.kujiang\.com\/book\/(95|96)\/catalog$/.test(value)) {
+  if (/^https:\/\/www\.kujiang\.com\/book\/(95|96)\d*\/catalog$/.test(value)) {
     await new Promise((resolve) => setTimeout(resolve, 2_500));
     throw new Error('fixture catalog fetch failure');
   }
