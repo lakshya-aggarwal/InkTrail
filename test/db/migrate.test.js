@@ -266,6 +266,31 @@ test('version 10 databases with malformed durable attempts require repair before
   assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 11').get().count, 0);
 });
 
+test('version 10 databases with an EPUB chapter checkpoint require repair before migration 11', (t) => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  const now = '2026-10-17T00:00:00.000Z';
+  for (const [version, name] of [
+    [1, '001-library.sql'], [2, '002-sources.sql'], [3, '003-normalize-kujiang-novel-source-urls.sql'],
+    [4, '004-translation-consistency.sql'], [5, '005-enforce-translation-consistency-ownership.sql'],
+    [6, '006-guard-translation-consistency-parent-ownership.sql'], [7, '007-durable-jobs-and-epub.sql'],
+    [8, '008-guard-job-targets-and-claims.sql'], [9, '009-guard-job-checkpoint-chapter-ownership.sql'],
+    [10, '010-kujiang-source-catalogs.sql']
+  ]) {
+    database.exec(readFileSync(new URL(`../../src/db/migrations/${name}`, import.meta.url), 'utf8'));
+    database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(version, now);
+  }
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
+  database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'novel-a', 1, 'One', now);
+  database.prepare(`insert into epub_exports (id, novel_id, state, selection_json, snapshot_at, file_name, created_at, updated_at)
+    values ('export-a', 'novel-a', 'queued', '{"chapterNumbers":[1]}', ?, 'export-a.epub', ?, ?)`).run(now, now, now);
+  database.prepare(`insert into jobs (id, novel_id, type, target_json, target_hash, state, priority, current_chapter_id, created_at, updated_at)
+    values ('job-a', 'novel-a', 'build_epub', '{"exportId":"export-a"}', 'hash-a', 'queued', 0, 'chapter-a', ?, ?)`).run(now, now);
+
+  assert.throws(() => migrate(database), /repair required: invalid durable job records/);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 11').get().count, 0);
+});
+
 test('version 10 databases preserve existing EPUB job references through migration 11', (t) => {
   const database = openDatabase({ databasePath: ':memory:' });
   t.after(() => database.close());

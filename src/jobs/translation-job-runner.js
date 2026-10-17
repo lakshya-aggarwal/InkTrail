@@ -228,6 +228,7 @@ export function createTranslationJobRunner({ jobs, translationService, epubBuild
 
     pause(input) {
       const job = jobs.getJob(input);
+      if (job.type === 'source_import_catalog') throw new ConflictError('source import jobs require their dedicated runner');
       const paused = jobs.pauseTranslationJob(input);
       if (job.type === 'build_epub') epubBuilder.reset({ novelId: job.novelId, exportId: job.target.exportId });
       for (const process of activeProcesses.values()) {
@@ -238,6 +239,7 @@ export function createTranslationJobRunner({ jobs, translationService, epubBuild
 
     async resume(input) {
       const job = jobs.getJob(input);
+      if (job.type === 'source_import_catalog') throw new ConflictError('source import jobs require their dedicated runner');
       if (job.state === 'queued') return job;
       const resumed = jobs.transitionJob({ ...input, toState: 'queued' });
       await wake();

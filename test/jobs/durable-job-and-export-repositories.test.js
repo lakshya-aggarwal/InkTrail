@@ -130,7 +130,7 @@ test('job checkpoints, targets, and claims reject stale or foreign work', (t) =>
 test('build EPUB jobs require an existing export owned by their novel', (t) => {
   const repositories = fixture();
   t.after(() => repositories.database.close());
-  const { firstNovel, secondNovel } = seed(repositories);
+  const { firstNovel, firstChapter, secondNovel } = seed(repositories);
   const firstExport = repositories.exports.captureSnapshot({ novelId: firstNovel.id, selection: { chapterNumbers: [1] } }).export;
   const secondExport = repositories.exports.captureSnapshot({ novelId: secondNovel.id, selection: { chapterNumbers: [1] } }).export;
 
@@ -141,6 +141,7 @@ test('build EPUB jobs require an existing export owned by their novel', (t) => {
     values ('foreign-export-job', ?, 'build_epub', ?, 'hash', 'queued', 0, '2026-10-14T00:00:00.000Z', '2026-10-14T00:00:00.000Z')
   `).run(firstNovel.id, JSON.stringify({ exportId: secondExport.id })), /EPUB job target must be an export owned by job novel/);
   const job = repositories.jobs.createBuildEpubJob({ novelId: firstNovel.id, target: { exportId: firstExport.id } });
+  assert.throws(() => repositories.database.prepare('update jobs set current_chapter_id = ? where id = ?').run(firstChapter.id, job.id), /job checkpoint must belong to job novel/);
   const claimed = repositories.jobs.claimNextRunnable({ claimToken: 'epub-claim' });
   assert.equal(claimed.id, job.id);
   const attempt = repositories.jobs.startAttempt({ novelId: firstNovel.id, jobId: job.id, claimToken: claimed.claimToken });
@@ -205,7 +206,20 @@ test('source import jobs are catalog-scoped, durable, and progress by imported c
   `).run(job.id, novel.id, snapshot.entries[0].id, claimed.claimToken));
   const attempt = repositories.jobs.startAttempt({ novelId: novel.id, jobId: job.id, catalogEntryId: snapshot.entries[0].id, claimToken: claimed.claimToken });
   assert.equal(attempt.catalogEntryId, snapshot.entries[0].id);
-  assert.equal(repositories.jobs.finishAttempt({ jobId: job.id, attemptId: attempt.id, claimToken: claimed.claimToken, state: 'succeeded' }).state, 'succeeded');
+  assert.deepEqual(repositories.jobs.recoverStaleTranslationClaims({ claimedBefore: '2026-10-15T00:00:00.000Z' }), []);
+  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).state, 'running');
+  assert.equal(repositories.jobs.listJobAttempts({ novelId: novel.id, jobId: job.id })[0].state, 'started');
+  const paused = repositories.jobs.pauseTranslationJob({ novelId: novel.id, jobId: job.id });
+  assert.equal(paused.currentCatalogEntryId, snapshot.entries[0].id);
+  assert.equal(paused.claimToken, null);
+  assert.equal(repositories.jobs.listJobAttempts({ novelId: novel.id, jobId: job.id })[0].state, 'abandoned_on_recovery');
+  const pauseEvent = repositories.jobs.listJobEvents({ novelId: novel.id, jobId: job.id }).find((event) => event.type === 'paused');
+  assert.deepEqual({ type: pauseEvent.type, catalogEntryId: pauseEvent.catalogEntryId, details: pauseEvent.details }, { type: 'paused', catalogEntryId: snapshot.entries[0].id, details: { catalogEntryId: snapshot.entries[0].id } });
+  repositories.jobs.transitionJob({ novelId: novel.id, jobId: job.id, toState: 'queued' });
+  const resumedClaim = repositories.jobs.claimNextRunnable({ claimToken: 'resumed-catalog-claim', type: 'source_import_catalog' });
+  assert.equal(resumedClaim.currentCatalogEntryId, snapshot.entries[0].id);
+  const resumedAttempt = repositories.jobs.startAttempt({ novelId: novel.id, jobId: job.id, catalogEntryId: snapshot.entries[0].id, claimToken: resumedClaim.claimToken });
+  assert.equal(repositories.jobs.finishAttempt({ jobId: job.id, attemptId: resumedAttempt.id, claimToken: resumedClaim.claimToken, state: 'succeeded' }).state, 'succeeded');
   assert.throws(() => repositories.jobs.markSourceImportCatalogEntryCompleted({ novelId: novel.id, jobId: job.id, catalogEntryId: snapshot.entries[0].id, chapterId: 'missing', claimToken: claimed.claimToken }), ConflictError);
 
   const chapter = repositories.chapters.recordChapter({ novelId: novel.id, chapterNumber: 1, title: 'One', originalText: 'One' });
@@ -223,8 +237,11 @@ test('source import jobs are catalog-scoped, durable, and progress by imported c
     fetchedAt: '2026-10-17T00:00:00.000Z',
     contentSha256: 'c'.repeat(64)
   });
-  assert.equal(repositories.jobs.markSourceImportCatalogEntryCompleted({ novelId: novel.id, jobId: job.id, catalogEntryId: snapshot.entries[0].id, chapterId: chapter.id, claimToken: claimed.claimToken }), true);
-  assert.equal(repositories.jobs.markSourceImportCatalogEntryCompleted({ novelId: novel.id, jobId: job.id, catalogEntryId: snapshot.entries[0].id, chapterId: chapter.id, claimToken: claimed.claimToken }), false);
+  assert.throws(() => repositories.database.prepare('update jobs set current_chapter_id = ? where id = ?').run(chapter.id, job.id), /job checkpoint must belong to job novel/);
+  const translationJob = repositories.jobs.createTranslationJob({ novelId: novel.id, target: { chapterNumbers: [1] } });
+  assert.throws(() => repositories.database.prepare('update jobs set current_catalog_entry_id = ? where id = ?').run(snapshot.entries[0].id, translationJob.id), /job checkpoint must belong to job novel/);
+  assert.equal(repositories.jobs.markSourceImportCatalogEntryCompleted({ novelId: novel.id, jobId: job.id, catalogEntryId: snapshot.entries[0].id, chapterId: chapter.id, claimToken: resumedClaim.claimToken }), true);
+  assert.equal(repositories.jobs.markSourceImportCatalogEntryCompleted({ novelId: novel.id, jobId: job.id, catalogEntryId: snapshot.entries[0].id, chapterId: chapter.id, claimToken: resumedClaim.claimToken }), false);
   assert.equal(repositories.jobs.nextSourceImportCatalogEntry({ novelId: novel.id, jobId: job.id }).id, snapshot.entries[1].id);
   assert.equal(repositories.jobs.listJobEvents({ novelId: novel.id, jobId: job.id }).some((event) => event.catalogEntryId === snapshot.entries[0].id && event.type === 'catalog_entry_completed'), true);
 });

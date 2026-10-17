@@ -159,6 +159,18 @@ test('startup recovery resets a recovered EPUB snapshot before claiming work', a
   assert.deepEqual(resets, [{ novelId: 'novel', exportId: 'export' }]);
 });
 
+test('generic runner rejects source-import lifecycle controls', async () => {
+  const jobs = {
+    getJob() {
+      return { id: 'source-job', novelId: 'novel', type: 'source_import_catalog', state: 'paused', target: { catalogId: 'catalog' } };
+    }
+  };
+  const runner = createTranslationJobRunner({ jobs, translationService: { async translateChapter() {} } });
+
+  assert.throws(() => runner.pause({ novelId: 'novel', jobId: 'source-job' }), ConflictError);
+  await assert.rejects(runner.resume({ novelId: 'novel', jobId: 'source-job' }), ConflictError);
+});
+
 test('serializes selected chapters for one novel in ascending order', async (t) => {
   const { clock, database, repositories } = fixture();
   t.after(() => database.close());

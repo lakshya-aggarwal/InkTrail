@@ -296,9 +296,14 @@ export function createJobRepository(database, clock) {
     update jobs set current_chapter_id = null, updated_at = ?
     where id = ? and novel_id = ? and state = 'running' and claim_token = ?
   `);
+  const setCatalogEntryCheckpoint = database.prepare(`
+    update jobs set current_catalog_entry_id = ?, updated_at = ?
+    where id = ? and novel_id = ? and state = 'running' and claim_token = ?
+  `);
   const staleRunningJobs = database.prepare(`
     select * from jobs
     where state = 'running'
+      and type in ('translate_chapters', 'build_epub')
       and (claimed_at is null or claimed_at <= ?)
   `);
   const renewClaim = database.prepare(`
@@ -323,7 +328,7 @@ export function createJobRepository(database, clock) {
     where id = ? and state = 'retrying' and next_run_at <= ?
   `);
   const nextRetry = database.prepare("select min(next_run_at) as next_run_at from jobs where type = 'translate_chapters' and state = 'retrying'");
-  const nextRunningClaim = database.prepare("select min(claimed_at) as claimed_at from jobs where state = 'running' and claimed_at is not null");
+  const nextRunningClaim = database.prepare("select min(claimed_at) as claimed_at from jobs where type in ('translate_chapters', 'build_epub') and state = 'running' and claimed_at is not null");
   const activeTranslationClaim = database.prepare(`
     select 1 from jobs
     where id = ? and novel_id = ? and type = 'translate_chapters'
@@ -628,6 +633,9 @@ export function createJobRepository(database, clock) {
           startedAt: clock().toISOString(),
           claimToken: token
         };
+        if (normalizedCatalogEntryId !== null && setCatalogEntryCheckpoint.run(normalizedCatalogEntryId, clock().toISOString(), job.id, id, token).changes === 0) {
+          throw new ConflictError('source import job claim is no longer active');
+        }
         insertAttempt.run(attempt);
         appendEvent(job, { type: normalizedCatalogEntryId ? 'catalog_entry_started' : 'chapter_started', message: 'Checkpoint started.', chapterId: normalizedChapterId, catalogEntryId: normalizedCatalogEntryId, details: normalizedCatalogEntryId ? { catalogEntryId: normalizedCatalogEntryId, attemptNumber: attempt.attemptNumber } : normalizedChapterId ? { chapterId: normalizedChapterId, attemptNumber: attempt.attemptNumber } : { attemptNumber: attempt.attemptNumber } });
         return toAttempt(attemptById.get(attempt.id, job.id));
@@ -745,6 +753,7 @@ export function createJobRepository(database, clock) {
           claimedAt: null,
           claimToken: null,
           currentChapterId: job.current_chapter_id,
+          currentCatalogEntryId: job.current_catalog_entry_id,
           lastErrorCode: null,
           lastErrorMessage: null,
           updatedAt: now,
@@ -752,7 +761,13 @@ export function createJobRepository(database, clock) {
         };
         if (updateJob.run(updated).changes === 0) throw new ConflictError('job state transition is stale');
         const paused = jobInNovel.get(job.id, id);
-        appendEvent(paused, { type: 'paused', message: 'Job paused.', chapterId: job.current_chapter_id, details: job.current_chapter_id ? { chapterId: job.current_chapter_id } : {} });
+        appendEvent(paused, {
+          type: 'paused',
+          message: 'Job paused.',
+          chapterId: job.current_chapter_id,
+          catalogEntryId: job.current_catalog_entry_id,
+          details: job.current_catalog_entry_id ? { catalogEntryId: job.current_catalog_entry_id } : job.current_chapter_id ? { chapterId: job.current_chapter_id } : {}
+        });
         return toJob(paused);
       });
     },

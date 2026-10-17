@@ -12,6 +12,7 @@ where exists (
   left join chapters on chapters.id = jobs.current_chapter_id
   where jobs.type not in ('translate_chapters', 'build_epub')
     or (jobs.current_chapter_id is not null and (chapters.id is null or chapters.novel_id <> jobs.novel_id))
+    or (jobs.type = 'build_epub' and jobs.current_chapter_id is not null)
     or (jobs.type = 'translate_chapters' and (json_valid(jobs.target_json) = 0 or not ((json_type(jobs.target_json, '$.startChapterNumber') = 'integer' and json_type(jobs.target_json, '$.endChapterNumber') = 'integer') or json_type(jobs.target_json, '$.chapterNumbers') = 'array')))
     or (jobs.type = 'build_epub' and (json_valid(jobs.target_json) = 0 or json_type(jobs.target_json, '$.exportId') is not 'text' or not exists (select 1 from epub_exports where epub_exports.id = json_extract(jobs.target_json, '$.exportId') and epub_exports.novel_id = jobs.novel_id)))
 ) or exists (
@@ -185,16 +186,18 @@ create trigger jobs_checkpoint_ownership_on_insert
 before insert on jobs
 for each row when (new.current_chapter_id is not null and not exists (select 1 from chapters where id = new.current_chapter_id and novel_id = new.novel_id))
 or (new.current_catalog_entry_id is not null and not exists (select 1 from source_catalog_entries where id = new.current_catalog_entry_id and novel_id = new.novel_id))
+or (new.type <> 'translate_chapters' and new.current_chapter_id is not null)
 or (new.type <> 'source_import_catalog' and new.current_catalog_entry_id is not null)
-or (new.type = 'source_import_catalog' and (new.current_chapter_id is not null or (new.current_catalog_entry_id is not null and not exists (select 1 from source_catalog_entries where id = new.current_catalog_entry_id and catalog_id = json_extract(new.target_json, '$.catalogId')))))
+or (new.type = 'source_import_catalog' and (new.current_catalog_entry_id is not null and not exists (select 1 from source_catalog_entries where id = new.current_catalog_entry_id and catalog_id = json_extract(new.target_json, '$.catalogId'))))
 begin select raise(abort, 'job checkpoint must belong to job novel'); end;
 
 create trigger jobs_checkpoint_ownership_on_update
-before update of novel_id, current_chapter_id, current_catalog_entry_id on jobs
+before update of novel_id, type, current_chapter_id, current_catalog_entry_id on jobs
 for each row when (new.current_chapter_id is not null and not exists (select 1 from chapters where id = new.current_chapter_id and novel_id = new.novel_id))
 or (new.current_catalog_entry_id is not null and not exists (select 1 from source_catalog_entries where id = new.current_catalog_entry_id and novel_id = new.novel_id))
+or (new.type <> 'translate_chapters' and new.current_chapter_id is not null)
 or (new.type <> 'source_import_catalog' and new.current_catalog_entry_id is not null)
-or (new.type = 'source_import_catalog' and (new.current_chapter_id is not null or (new.current_catalog_entry_id is not null and not exists (select 1 from source_catalog_entries where id = new.current_catalog_entry_id and catalog_id = json_extract(new.target_json, '$.catalogId')))))
+or (new.type = 'source_import_catalog' and (new.current_catalog_entry_id is not null and not exists (select 1 from source_catalog_entries where id = new.current_catalog_entry_id and catalog_id = json_extract(new.target_json, '$.catalogId'))))
 begin select raise(abort, 'job checkpoint must belong to job novel'); end;
 
 create trigger source_import_job_target_on_insert
