@@ -77,8 +77,32 @@ async function createSourceImportJob(request, novelId) {
   return created.json();
 }
 
-async function settleWorkspaceAction(page) {
-  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+async function installWorkspaceActionSettlementObserver(page) {
+  await page.addInitScript(() => {
+    const observedActions = new Map([
+      ['source-catalog-form', 'submit'],
+      ['import-source-catalog', 'click'],
+      ['source-import-job-control', 'click']
+    ]);
+    const originalAddEventListener = EventTarget.prototype.addEventListener;
+    window.__inktrailWorkspaceActionSettlements = [];
+
+    EventTarget.prototype.addEventListener = function (type, listener, options) {
+      const targetId = this instanceof Element ? this.id : '';
+      if (observedActions.get(targetId) !== type || typeof listener !== 'function') {
+        return originalAddEventListener.call(this, type, listener, options);
+      }
+
+      return originalAddEventListener.call(this, type, function (...args) {
+        const result = listener.apply(this, args);
+        Promise.resolve(result).then(
+          () => window.__inktrailWorkspaceActionSettlements.push(targetId),
+          () => window.__inktrailWorkspaceActionSettlements.push(targetId)
+        );
+        return result;
+      }, options);
+    };
+  });
 }
 
 async function switchToFreshSourceWorkspace(page, { targetNovelId }) {
@@ -88,7 +112,6 @@ async function switchToFreshSourceWorkspace(page, { targetNovelId }) {
   ));
   await page.locator(`[data-novel-id="${targetNovelId}"]`).click();
   await catalogsLoaded;
-  await settleWorkspaceAction(page);
   await expect(page).toHaveURL(new RegExp(`\\?novel=${targetNovelId}&chapter=1$`));
   await expect(page.getByLabel('Add Kujiang source')).toBeEnabled();
   await expect(page.locator('#workspace-status')).toHaveText('');
@@ -137,13 +160,13 @@ function isWorkspaceRefresh(request, novelId) {
     && url.pathname === '/api/v1/jobs';
 }
 
-async function expectStaleWorkspaceActionToLeaveTargetUntouched(page, heldAction, targetNovelId) {
+async function expectStaleWorkspaceActionToLeaveTargetUntouched(page, heldAction, targetNovelId, actionTargetId) {
   const refreshes = [];
   const observe = (request) => { if (isWorkspaceRefresh(request, targetNovelId)) refreshes.push(request.url()); };
   page.on('request', observe);
   try {
     heldAction.release();
-    await settleWorkspaceAction(page);
+    await page.waitForFunction((targetId) => window.__inktrailWorkspaceActionSettlements.includes(targetId), actionTargetId);
     await expect(page.locator('#workspace-status')).toHaveText('');
     await expect(page.locator('#source-catalog')).toBeHidden();
     await expect(page.locator('#source-import-job')).toBeHidden();
@@ -479,6 +502,7 @@ for (const [name, sourceBookPrefix, errorMessage] of [
       sourceBookId,
       title: `Stale source discovery ${name}`
     });
+    await installWorkspaceActionSettlementObserver(page);
     await page.goto(`/?novel=${sourceNovelId}&chapter=1`);
     await expect(page.getByLabel('Add Kujiang source')).toBeVisible();
     const held = await holdWorkspaceAction(
@@ -491,7 +515,7 @@ for (const [name, sourceBookPrefix, errorMessage] of [
     await page.getByRole('button', { name: 'Discover source' }).click();
     expect((await held.arrived).status).toBe(errorMessage ? 502 : 201);
     await switchToFreshSourceWorkspace(page, { targetNovelId });
-    await expectStaleWorkspaceActionToLeaveTargetUntouched(page, held, targetNovelId);
+    await expectStaleWorkspaceActionToLeaveTargetUntouched(page, held, targetNovelId, 'source-catalog-form');
   });
 }
 
@@ -505,6 +529,7 @@ for (const [name, errorMessage] of [
       sourceBookId,
       title: `Stale source import ${name}`
     });
+    await installWorkspaceActionSettlementObserver(page);
     await discoverSourceCatalog(page.request, sourceNovelId, sourceBookId);
     await page.goto(`/?novel=${sourceNovelId}&chapter=1`);
     await expect(page.getByRole('button', { name: 'Import source chapters' })).toBeVisible();
@@ -517,7 +542,7 @@ for (const [name, errorMessage] of [
     await page.getByRole('button', { name: 'Import source chapters' }).click();
     expect((await held.arrived).status).toBe(errorMessage ? 502 : 201);
     await switchToFreshSourceWorkspace(page, { targetNovelId });
-    await expectStaleWorkspaceActionToLeaveTargetUntouched(page, held, targetNovelId);
+    await expectStaleWorkspaceActionToLeaveTargetUntouched(page, held, targetNovelId, 'import-source-catalog');
   });
 }
 
@@ -532,6 +557,7 @@ for (const action of ['pause', 'resume']) {
         sourceBookId,
         title: `Stale source import ${action} ${name}`
       });
+      await installWorkspaceActionSettlementObserver(page);
       await discoverSourceCatalog(page.request, sourceNovelId, sourceBookId);
       const job = await createSourceImportJob(page.request, sourceNovelId);
       if (action === 'resume') {
@@ -550,7 +576,7 @@ for (const action of ['pause', 'resume']) {
       await page.getByRole('button', { name: controlName }).click();
       expect((await held.arrived).status).toBe(errorMessage ? 502 : 200);
       await switchToFreshSourceWorkspace(page, { targetNovelId });
-      await expectStaleWorkspaceActionToLeaveTargetUntouched(page, held, targetNovelId);
+      await expectStaleWorkspaceActionToLeaveTargetUntouched(page, held, targetNovelId, 'source-import-job-control');
     });
   }
 }
