@@ -25,21 +25,31 @@ durable retries and recovery, immutable EPUB snapshots, and reader workspace
 controls are implemented. Work remains novel-scoped and translation starts only
 from imported sourced chapters.
 
-## Next Plan Boundary
+## Kujiang Catalog Import
 
-Kujiang catalog-backed source import. A reader will explicitly submit a
-canonical Kujiang book URL, persist a bounded ordered catalog separately from
-content, and start a resumable source-only import job. See [ADR
+Complete. A reader can explicitly submit a canonical Kujiang book URL, persist
+a bounded ordered catalog separately from content, and run a resumable
+source-only import job. The reader workspace exposes deliberate discovery,
+import, progress, pause/resume, and stale-navigation-safe controls. See [ADR
 0005](../decisions/0005-kujiang-catalog-and-durable-source-import.md) and the
 [implementation plan](../superpowers/plans/2026-10-17-inktrail-kujiang-source-catalog.md).
+
+## Next Plan Boundary
+
+Evidence-backed NovelPing source resolution. A reader will submit one canonical
+NovelPing chapter URL, and InkTrail will propose a Chinese source catalog only
+after persisted title, author, chapter-number, and catalog evidence passes a
+deterministic threshold. Import stays explicit. See [ADR
+0006](../decisions/0006-evidence-backed-novelping-source-resolution.md) and the
+[implementation plan](../superpowers/plans/2026-10-17-inktrail-novelping-source-resolution.md).
 
 ## Later Boundaries
 
 1. Additional adapters and legacy import: migrate source sites one at a time and
    build the opt-in, read-only JSON importer with duplicate review reporting.
 
-2. Source resolution: consider NovelPing only after the Kujiang catalog flow is
-   proven, with resolver evidence and safety review separate from adapters.
+2. Additional resolver providers: add site-specific source-catalog adapters
+   only after fixture-backed evidence and safety review.
 
 ## Deferred
 
