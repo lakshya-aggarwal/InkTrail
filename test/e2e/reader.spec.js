@@ -343,3 +343,53 @@ test('workspace discovers and controls a source catalog without interrupting rea
   await expect(page).toHaveURL(new RegExp(`\\?novel=${novelBody.id}&chapter=11$`));
   await expect(page.locator('#translation-workspace')).toBeHidden();
 });
+
+test('stale source discovery completion cannot update a newer sourced workspace', async ({ page }, testInfo) => {
+  const bookId = testInfo.project.name === 'desktop-chromium' ? '93' : '94';
+  const chapterId = `${testInfo.workerIndex + 1}931`;
+  const novel = await page.request.post('/api/v1/novels', { data: { title: 'Stale source workspace novel' } });
+  const novelBody = await novel.json();
+  for (const chapterNumber of [10, 11]) {
+    const sourced = await page.request.post(`/api/v1/novels/${novelBody.id}/source-chapters`, {
+      data: { sourceUrl: `https://www.kujiang.com/book/${bookId}/${chapterId + chapterNumber}`, chapterNumber }
+    });
+    expect(sourced.ok(), await sourced.text()).toBeTruthy();
+  }
+  await page.goto(`/?novel=${novelBody.id}&chapter=10`);
+  await expect(page.getByLabel('Add Kujiang source')).toBeVisible();
+
+  const discovery = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/source-catalogs'));
+  await page.getByLabel('Add Kujiang source').fill(`https://www.kujiang.com/book/${bookId}`);
+  await page.getByRole('button', { name: 'Discover source' }).click();
+  await page.getByRole('button', { name: 'Next chapter' }).last().click();
+  await expect(page).toHaveURL(new RegExp(`\\?novel=${novelBody.id}&chapter=11$`));
+  await expect(page.getByLabel('Add Kujiang source')).toBeEnabled();
+  expect((await discovery).status()).toBe(201);
+  await expect(page.locator('#workspace-status')).toHaveText('');
+  await expect(page.locator('#source-catalog')).toBeHidden();
+});
+
+test('stale source discovery error cannot update a newer sourced workspace', async ({ page }, testInfo) => {
+  const bookId = testInfo.project.name === 'desktop-chromium' ? '95' : '96';
+  const chapterId = `${testInfo.workerIndex + 1}951`;
+  const novel = await page.request.post('/api/v1/novels', { data: { title: 'Stale source error workspace novel' } });
+  const novelBody = await novel.json();
+  for (const chapterNumber of [10, 11]) {
+    const sourced = await page.request.post(`/api/v1/novels/${novelBody.id}/source-chapters`, {
+      data: { sourceUrl: `https://www.kujiang.com/book/${bookId}/${chapterId + chapterNumber}`, chapterNumber }
+    });
+    expect(sourced.ok(), await sourced.text()).toBeTruthy();
+  }
+  await page.goto(`/?novel=${novelBody.id}&chapter=10`);
+  await expect(page.getByLabel('Add Kujiang source')).toBeVisible();
+
+  const discovery = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/source-catalogs'));
+  await page.getByLabel('Add Kujiang source').fill(`https://www.kujiang.com/book/${bookId}`);
+  await page.getByRole('button', { name: 'Discover source' }).click();
+  await page.getByRole('button', { name: 'Next chapter' }).last().click();
+  await expect(page).toHaveURL(new RegExp(`\\?novel=${novelBody.id}&chapter=11$`));
+  await expect(page.getByLabel('Add Kujiang source')).toBeEnabled();
+  expect((await discovery).status()).toBe(502);
+  await expect(page.locator('#workspace-status')).toHaveText('');
+  await expect(page.locator('#source-catalog')).toBeHidden();
+});

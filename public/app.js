@@ -224,6 +224,9 @@ function showWorkspace(chapter) {
   workspaceExportDownload.hidden = true;
   sourceCatalog.hidden = true;
   sourceImportJob.hidden = true;
+  discoverSourceCatalog.disabled = false;
+  importSourceCatalog.disabled = false;
+  sourceImportJobControl.disabled = false;
   workspaceCatalogProgress = null;
   clearWorkspaceStatus();
   void refreshWorkspace(chapter.novelId, token);
@@ -439,38 +442,45 @@ createEpub.addEventListener('click', async () => {
 sourceCatalogForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (!currentChapter?.hasSourceProvenance || !sourceBookUrl.value.trim()) return;
+  const novelId = currentChapter.novelId;
+  const token = workspaceToken;
   try {
     discoverSourceCatalog.disabled = true;
     clearWorkspaceStatus();
-    await request(`/api/v1/novels/${encodeURIComponent(currentChapter.novelId)}/source-catalogs`, {
+    await request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-catalogs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ bookUrl: sourceBookUrl.value.trim() })
     });
+    if (!workspaceStillSelected(novelId, token)) return;
     setWorkspaceStatus('Source catalog saved. Import starts only when you choose it.');
-    await refreshWorkspace(currentChapter.novelId);
+    await refreshWorkspace(novelId, token);
   } catch (error) {
-    setWorkspaceStatus(error.message, { error: true });
+    if (workspaceStillSelected(novelId, token)) setWorkspaceStatus(error.message, { error: true });
   } finally {
-    discoverSourceCatalog.disabled = false;
+    if (workspaceStillSelected(novelId, token)) discoverSourceCatalog.disabled = false;
   }
 });
 importSourceCatalog.addEventListener('click', async () => {
   if (!currentChapter?.hasSourceProvenance || !workspaceCatalogProgress) return;
+  const novelId = currentChapter.novelId;
+  const token = workspaceToken;
+  const catalogId = workspaceCatalogProgress.id;
   try {
     importSourceCatalog.disabled = true;
     clearWorkspaceStatus();
     await request('/api/v1/jobs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ novelId: currentChapter.novelId, type: 'source_import_catalog', target: { catalogId: workspaceCatalogProgress.id } })
+      body: JSON.stringify({ novelId, type: 'source_import_catalog', target: { catalogId } })
     });
+    if (!workspaceStillSelected(novelId, token)) return;
     setWorkspaceStatus('Source import job saved.');
-    await refreshWorkspace(currentChapter.novelId);
+    await refreshWorkspace(novelId, token);
   } catch (error) {
-    setWorkspaceStatus(error.message, { error: true });
+    if (workspaceStillSelected(novelId, token)) setWorkspaceStatus(error.message, { error: true });
   } finally {
-    importSourceCatalog.disabled = false;
+    if (workspaceStillSelected(novelId, token)) importSourceCatalog.disabled = false;
   }
 });
 workspaceJobControl.addEventListener('click', async () => {
@@ -488,15 +498,20 @@ workspaceJobControl.addEventListener('click', async () => {
 });
 sourceImportJobControl.addEventListener('click', async () => {
   if (!currentChapter || !sourceImportJobControl.dataset.jobId) return;
+  const novelId = currentChapter.novelId;
+  const token = workspaceToken;
+  const jobId = sourceImportJobControl.dataset.jobId;
+  const action = sourceImportJobControl.dataset.action;
   try {
     sourceImportJobControl.disabled = true;
     clearWorkspaceStatus();
-    await request(`/api/v1/jobs/${encodeURIComponent(sourceImportJobControl.dataset.jobId)}/${sourceImportJobControl.dataset.action}?novelId=${encodeURIComponent(currentChapter.novelId)}`, { method: 'POST' });
-    await refreshWorkspace(currentChapter.novelId);
+    await request(`/api/v1/jobs/${encodeURIComponent(jobId)}/${action}?novelId=${encodeURIComponent(novelId)}`, { method: 'POST' });
+    if (!workspaceStillSelected(novelId, token)) return;
+    await refreshWorkspace(novelId, token);
   } catch (error) {
-    setWorkspaceStatus(error.message, { error: true });
+    if (workspaceStillSelected(novelId, token)) setWorkspaceStatus(error.message, { error: true });
   } finally {
-    sourceImportJobControl.disabled = false;
+    if (workspaceStillSelected(novelId, token)) sourceImportJobControl.disabled = false;
   }
 });
 window.addEventListener('keydown', (event) => { if (event.target.matches('input, textarea, select, button, a, [contenteditable]')) return; if (event.key === 'ArrowLeft') navigate('previous'); if (event.key === 'ArrowRight') navigate('next'); });
