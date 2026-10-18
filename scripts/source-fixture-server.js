@@ -8,11 +8,18 @@ import { createApp } from '../src/app.js';
 const sourceUrl = /^https:\/\/www\.kujiang\.com\/book\/[1-9]\d*\/[1-9]\d*$/;
 const failedSourceUrl = 'https://www.kujiang.com/book/9/906597';
 const catalogUrl = 'https://www.kujiang.com/book/9/catalog';
+const novelPingUrl = 'https://novelping.com/book/return-of-the-war-god/chapter-2-lamp-fire';
 const fixturePath = new URL('../test/fixtures/kujiang/chapter.html', import.meta.url);
 const catalogFixturePath = new URL('../test/fixtures/kujiang/catalog.html', import.meta.url);
+const novelPingFixturePath = new URL('../test/fixtures/novelping/chapter-2.html', import.meta.url);
 
 async function fixtureFetch(url) {
   const value = String(url);
+  if (value === novelPingUrl) {
+    return new Response(await readFile(novelPingFixturePath, 'utf8'), {
+      headers: { 'content-type': 'text/html; charset=utf-8' }
+    });
+  }
   if (value === catalogUrl) {
     return new Response(await readFile(catalogFixturePath, 'utf8'), {
       headers: { 'content-type': 'text/html; charset=utf-8' }
@@ -74,6 +81,14 @@ const app = await createApp({
   databasePath: join(mkdtempSync(join(tmpdir(), 'inktrail-source-fixture-')), 'inktrail.sqlite'),
   fetch: fixtureFetch,
   translationProvider: fixtureTranslationProvider,
+  resolverCandidateIdentities: [{
+    bookUrl: 'https://www.kujiang.com/book/9',
+    novelTitle: '战神狂飙',
+    novelTitleAliases: ['return of the war god'],
+    author: '天蚕土豆',
+    authorAliases: ['tian can tu dou'],
+    chapterTitleAliases: { '101': ['lamp fire'] }
+  }],
   runnerOptions: { retryDelayMs: 5 }
 });
 const port = Number(process.env.PORT ?? 4278);

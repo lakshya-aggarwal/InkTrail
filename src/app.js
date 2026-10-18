@@ -23,6 +23,9 @@ import { createSourceImportService } from './sources/source-import-service.js';
 import { createSourceCatalogRepository } from './sources/source-catalog-repository.js';
 import { createSourceCatalogService } from './sources/source-catalog-service.js';
 import { createSourceRepository } from './sources/source-repository.js';
+import { createNovelPingExtractor } from './sources/novelping-extractor.js';
+import { createSourceResolutionRepository } from './sources/source-resolution-repository.js';
+import { createSourceResolutionService } from './sources/source-resolution-service.js';
 import { createOllamaTranslationProvider } from './translation/ollama-translation-provider.js';
 import { createQualityFindingRepository } from './translation/quality-finding-repository.js';
 import { createTranslationService } from './translation/translation-service.js';
@@ -42,7 +45,7 @@ async function serveBrowserAsset(request, response) {
   return true;
 }
 
-export async function createApp({ databasePath, exportRoot = join(dirname(databasePath), 'exports'), fetch = globalThis.fetch, translationProvider = createOllamaTranslationProvider({ fetch }), writeEpubArchive: archiveWriter = writeEpubArchive, runnerOptions = {} }) {
+export async function createApp({ databasePath, exportRoot = join(dirname(databasePath), 'exports'), fetch = globalThis.fetch, translationProvider = createOllamaTranslationProvider({ fetch }), writeEpubArchive: archiveWriter = writeEpubArchive, runnerOptions = {}, resolverCandidateIdentities = [], novelPingExtractor = createNovelPingExtractor({ fetch }) }) {
   const database = openDatabase({ databasePath });
   try {
     migrate(database);
@@ -61,7 +64,8 @@ export async function createApp({ databasePath, exportRoot = join(dirname(databa
     feedback: createFeedbackRepository(database, clock),
     jobs: createJobRepository(database, clock),
     exports: createExportRepository(database, clock),
-    catalogs: createSourceCatalogRepository(database, clock)
+    catalogs: createSourceCatalogRepository(database, clock),
+    resolutions: createSourceResolutionRepository(database, clock)
   };
   const exports = createExportRoot({ exportRoot });
   try {
@@ -70,7 +74,7 @@ export async function createApp({ databasePath, exportRoot = join(dirname(databa
     database.close();
     throw error;
   }
-  const kujiangAdapter = createKujiangAdapter({ fetch });
+  const kujiangAdapter = createKujiangAdapter({ fetch, candidateIdentities: resolverCandidateIdentities });
   const adapterRegistry = createAdapterRegistry([kujiangAdapter]);
   const sourceImportService = createSourceImportService({
     database,
@@ -79,6 +83,12 @@ export async function createApp({ databasePath, exportRoot = join(dirname(databa
     clock
   });
   const sourceCatalogService = createSourceCatalogService({ database, repositories, catalogAdapter: kujiangAdapter });
+  const sourceResolutionService = createSourceResolutionService({
+    database,
+    repositories,
+    novelPingExtractor,
+    catalogAdapters: [kujiangAdapter]
+  });
   const translationService = createTranslationService({ database, repositories, provider: translationProvider });
   const epubBuilder = createEpubBuilder({ exports: repositories.exports, exportRoot: exports, writeArchive: archiveWriter });
   const runner = createTranslationJobRunner({
@@ -96,6 +106,7 @@ export async function createApp({ databasePath, exportRoot = join(dirname(databa
     feedbackVerificationService: createFeedbackVerificationService({ database, repositories }),
     jobService: createJobService({ database, jobs: repositories.jobs, exports: repositories.exports, runner }),
     sourceCatalogService,
+    sourceResolutionService,
     epubBuilder,
     repositories
   });

@@ -11,10 +11,12 @@
     { "key": "feedbackId", "value": "", "description": "Set by Submit translation feedback." },
     { "key": "jobId", "value": "", "description": "Set by Create translation job." },
     { "key": "catalogId", "value": "", "description": "Set by Discover source catalog." },
+    { "key": "sourceResolutionAttemptId", "value": "", "description": "Set by Resolve NovelPing source." },
     { "key": "exportId", "value": "", "description": "Set by Create EPUB export." },
     { "key": "missingNovelId", "value": "missing" },
     { "key": "fixtureSourceChapterUrl", "value": "https://www.kujiang.com/book/9/906595", "description": "Canonical Kujiang identity served from test/fixtures/kujiang/chapter.html by the local fixture server." },
     { "key": "fixtureSourceBookUrl", "value": "https://www.kujiang.com/book/9", "description": "Canonical Kujiang book identity served from test/fixtures/kujiang/catalog.html by the local fixture server." },
+    { "key": "fixtureNovelPingUrl", "value": "https://novelping.com/book/return-of-the-war-god/chapter-2-lamp-fire", "description": "Canonical NovelPing fixture identity served from test/fixtures/novelping/chapter-2.html by the local fixture server." },
     { "key": "fixtureSourceFetchFailureUrl", "value": "https://www.kujiang.com/book/9/906597", "description": "Canonical Kujiang identity that the local fixture server deterministically fails." },
     { "key": "unsupportedSourceUrl", "value": "https://example.test/chapter" }
   ],
@@ -81,12 +83,31 @@
       "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-catalogs/{{catalogId}}" }
     },
     {
-      "name": "Create source import job",
+      "name": "Resolve NovelPing source",
       "request": {
         "method": "POST",
-        "header": [{ "key": "content-type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "fixture-source-import-job-1" }],
-        "body": { "mode": "raw", "raw": "{\n  \"novelId\": \"{{novelId}}\",\n  \"type\": \"source_import_catalog\",\n  \"target\": { \"catalogId\": \"{{catalogId}}\" }\n}" },
-        "url": "{{baseUrl}}/api/v1/jobs"
+        "header": [{ "key": "content-type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "fixture-source-resolution-1" }],
+        "body": { "mode": "raw", "raw": "{\n  \"novelPingUrl\": \"{{fixtureNovelPingUrl}}\"\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-resolutions"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('persists or replays a safe source resolution without importing chapters', () => pm.expect([200, 201]).to.include(pm.response.code));", "pm.test('accepts the fixture source', () => pm.expect(pm.response.json().state).to.eql('resolved'));", "pm.collectionVariables.set('sourceResolutionAttemptId', pm.response.json().id);"]
+        }
+      }]
+    },
+    {
+      "name": "Get source resolution",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-resolutions/{{sourceResolutionAttemptId}}" }
+    },
+    {
+      "name": "Create resolved source import job",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Idempotency-Key", "value": "fixture-source-import-job-1" }],
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-resolutions/{{sourceResolutionAttemptId}}/catalog-import"
       },
       "event": [{
         "listen": "test",

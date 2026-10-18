@@ -226,6 +226,101 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '404':
           $ref: '#/components/responses/NotFound'
+  /api/v1/novels/{novelId}/source-resolutions:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+    get:
+      operationId: listSourceResolutions
+      summary: List bounded source resolution attempts
+      responses:
+        '200':
+          description: Newest-first source resolution summaries without upstream content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceResolutionAttemptList'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: resolveNovelPingSource
+      summary: Resolve one canonical NovelPing chapter to an accepted source catalog
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceResolutionInput'
+      responses:
+        '200':
+          description: Equivalent durable source resolution replayed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceResolutionDetail'
+        '201':
+          description: Source resolution attempt persisted without importing chapters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceResolutionDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '502':
+          $ref: '#/components/responses/SourceFetchFailed'
+  /api/v1/novels/{novelId}/source-resolutions/{attemptId}:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+      - $ref: '#/components/parameters/SourceResolutionAttemptId'
+    get:
+      operationId: getSourceResolution
+      summary: Get evidence, ranked candidates, decision, and import eligibility
+      responses:
+        '200':
+          description: Persisted normalized resolution evidence without upstream HTML or translated prose
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceResolutionDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/novels/{novelId}/source-resolutions/{attemptId}/catalog-import:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+      - $ref: '#/components/parameters/SourceResolutionAttemptId'
+    post:
+      operationId: createSourceResolutionCatalogImport
+      summary: Create the existing catalog-import job for an accepted source resolution
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Equivalent source import job returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '201':
+          description: Source import job created for an accepted current resolution
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /api/v1/novels/{novelId}/chapters/{chapterNumber}:
     parameters:
       - $ref: '#/components/parameters/NovelId'
@@ -667,6 +762,13 @@ components:
       schema:
         type: string
         format: uuid
+    SourceResolutionAttemptId:
+      name: attemptId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -832,6 +934,154 @@ components:
           maxItems: 5000
           items:
             $ref: '#/components/schemas/SourceCatalogEntry'
+    SourceResolutionInput:
+      type: object
+      additionalProperties: false
+      required: [novelPingUrl]
+      properties:
+        novelPingUrl:
+          type: string
+          format: uri
+          description: Canonical HTTPS NovelPing chapter URL. Query strings, fragments, credentials, and non-canonical host or path forms are rejected.
+          pattern: '^https://novelping\.com/book/[a-z0-9]+(?:-[a-z0-9]+)*/chapter-[1-9][0-9]*(?:-[a-z0-9]+)*$'
+          example: https://novelping.com/book/return-of-the-war-god/chapter-2491-shen-guanghai
+    SourceResolutionAcceptedSource:
+      type: object
+      required: [resolutionId, novelSourceId, catalogId]
+      properties:
+        resolutionId:
+          type: string
+          format: uuid
+        novelSourceId:
+          type: string
+          format: uuid
+        catalogId:
+          type: string
+          format: uuid
+    SourceResolutionAttemptSummary:
+      type: object
+      required: [id, canonicalNovelPingUrl, state, createdAt, acceptedSource]
+      properties:
+        id:
+          type: string
+          format: uuid
+        canonicalNovelPingUrl:
+          type: string
+          format: uri
+        state:
+          type: string
+          enum: [resolved, unresolved, failed]
+        errorCode:
+          type: string
+          nullable: true
+        selectedCandidateId:
+          type: string
+          format: uuid
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        acceptedSource:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/SourceResolutionAcceptedSource'
+          nullable: true
+    SourceResolutionEvidence:
+      type: object
+      required: [canonicalNovelPingUrl, novelTitle, chapterNumber, chapterTitle, extractorVersion]
+      properties:
+        canonicalNovelPingUrl:
+          type: string
+          format: uri
+        novelTitle:
+          type: string
+        author:
+          type: string
+          nullable: true
+        chapterNumber:
+          type: integer
+          minimum: 1
+        chapterTitle:
+          type: string
+        extractorVersion:
+          type: string
+    SourceResolutionCandidate:
+      type: object
+      required: [id, adapter, site, canonicalSourceIdentity, metadata, aliases, catalogEntryOrdinal, catalogEntryExternalId, componentScores, totalScore, rank, decisionReason]
+      properties:
+        id:
+          type: string
+          format: uuid
+        adapter:
+          type: string
+        site:
+          type: string
+        canonicalSourceIdentity:
+          type: string
+          format: uri
+        metadata:
+          type: object
+          additionalProperties: true
+        aliases:
+          type: object
+          additionalProperties: true
+        catalogEntryOrdinal:
+          type: integer
+          minimum: 1
+        catalogEntryExternalId:
+          type: string
+        componentScores:
+          type: object
+          additionalProperties: true
+        totalScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+        rank:
+          type: integer
+          minimum: 1
+        decisionReason:
+          type: string
+    SourceResolutionDecision:
+      type: object
+      required: [state, selectedCandidateId]
+      properties:
+        state:
+          type: string
+          enum: [resolved, unresolved, failed]
+        errorCode:
+          type: string
+          nullable: true
+        selectedCandidateId:
+          type: string
+          format: uuid
+          nullable: true
+    SourceResolutionDetail:
+      allOf:
+        - $ref: '#/components/schemas/SourceResolutionAttemptSummary'
+        - type: object
+          required: [evidence, candidates, decision, importEligible]
+          properties:
+            evidence:
+              $ref: '#/components/schemas/SourceResolutionEvidence'
+            candidates:
+              type: array
+              maxItems: 4
+              items:
+                $ref: '#/components/schemas/SourceResolutionCandidate'
+            decision:
+              $ref: '#/components/schemas/SourceResolutionDecision'
+            importEligible:
+              type: boolean
+    SourceResolutionAttemptList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/SourceResolutionAttemptSummary'
     SetReadingProgressInput:
       type: object
       required: [chapterNumber]

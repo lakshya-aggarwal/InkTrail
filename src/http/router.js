@@ -99,6 +99,13 @@ function sourceCatalogInput(input) {
   return input;
 }
 
+function sourceResolutionInput(input) {
+  if (Object.keys(input).length !== 1 || !Object.hasOwn(input, 'novelPingUrl')) {
+    throw new ValidationError('input must contain only novelPingUrl');
+  }
+  return input;
+}
+
 function sourceImportCatalogJobInput(input) {
   if (Object.keys(input).length !== 3 || !['novelId', 'type', 'target'].every((key) => Object.hasOwn(input, key))) {
     throw new ValidationError('input must contain only novelId, type, and target');
@@ -131,6 +138,95 @@ function sourceCatalogDetail(snapshot, summary) {
   };
 }
 
+function parsedJson(value) {
+  return JSON.parse(value);
+}
+
+function sourceResolutionSummary({ attempt, resolution }) {
+  return {
+    id: attempt.id,
+    canonicalNovelPingUrl: attempt.canonicalNovelPingUrl,
+    state: attempt.state,
+    errorCode: attempt.errorCode,
+    selectedCandidateId: attempt.selectedCandidateId,
+    createdAt: attempt.createdAt,
+    acceptedSource: resolution ? {
+      resolutionId: resolution.id,
+      novelSourceId: resolution.novelSourceId,
+      catalogId: resolution.catalogId
+    } : null
+  };
+}
+
+function sourceResolutionDetail(detail, importEligible) {
+  return {
+    ...sourceResolutionSummary(detail),
+    evidence: parsedJson(detail.attempt.evidenceJson),
+    candidates: detail.candidates.map((candidate) => ({
+      id: candidate.id,
+      adapter: candidate.adapter,
+      site: candidate.site,
+      canonicalSourceIdentity: candidate.canonicalSourceIdentity,
+      metadata: parsedJson(candidate.normalizedMetadataJson),
+      aliases: parsedJson(candidate.declaredAliasesJson),
+      catalogEntryOrdinal: candidate.catalogEntryOrdinal,
+      catalogEntryExternalId: candidate.catalogEntryExternalId,
+      componentScores: parsedJson(candidate.componentScoresJson),
+      totalScore: candidate.totalScore,
+      rank: candidate.rank,
+      decisionReason: candidate.decisionReason
+    })),
+    decision: {
+      state: detail.attempt.state,
+      errorCode: detail.attempt.errorCode,
+      selectedCandidateId: detail.attempt.selectedCandidateId
+    },
+    importEligible
+  };
+}
+
+function sourceResolutionImportTarget(repositories, novelId, attemptId) {
+  const detail = repositories.resolutions.getAttempt(novelId, attemptId);
+  const { attempt, resolution } = detail;
+  if (attempt.state !== 'resolved' || !resolution || resolution.candidateId !== attempt.selectedCandidateId) {
+    throw new ConflictError('source resolution is not accepted for import');
+  }
+  const candidate = detail.candidates.find((item) => item.id === resolution.candidateId);
+  if (!candidate || candidate.catalogId !== resolution.catalogId) {
+    throw new ConflictError('accepted source resolution is stale');
+  }
+  const source = repositories.sources.findNovelSourceByCanonicalUrl({
+    site: candidate.site,
+    normalizedUrl: candidate.canonicalSourceIdentity
+  });
+  if (!source || source.id !== resolution.novelSourceId || source.novelId !== novelId) {
+    throw new ConflictError('accepted source resolution is stale');
+  }
+  let snapshot;
+  try {
+    snapshot = repositories.catalogs.getSnapshot(novelId, resolution.catalogId);
+  } catch {
+    throw new ConflictError('accepted source resolution is stale');
+  }
+  if (snapshot.catalog.novelSourceId !== source.id
+    || snapshot.catalog.site !== candidate.site
+    || snapshot.catalog.canonicalBookUrl !== candidate.canonicalSourceIdentity
+    || snapshot.catalog.contentSha256 !== candidate.contentSha256
+    || !snapshot.entries.some((entry) => entry.id === resolution.catalogEntryId)) {
+    throw new ConflictError('accepted source resolution is stale');
+  }
+  return { catalogId: snapshot.catalog.id };
+}
+
+function sourceResolutionIsImportEligible(repositories, novelId, attemptId) {
+  try {
+    sourceResolutionImportTarget(repositories, novelId, attemptId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function writeDownload(response, download, exportId) {
   await new Promise((resolve, reject) => {
     download.stream.once('error', reject);
@@ -145,7 +241,7 @@ async function writeDownload(response, download, exportId) {
   });
 }
 
-export function createRouter({ libraryService, translationService, feedbackVerificationService, jobService, sourceCatalogService, epubBuilder, repositories }) {
+export function createRouter({ libraryService, translationService, feedbackVerificationService, jobService, sourceCatalogService, sourceResolutionService, epubBuilder, repositories }) {
   return async function router(request, response) {
     const { method } = request;
     const { pathname, searchParams } = new URL(request.url ?? '/', 'http://localhost');
@@ -242,6 +338,76 @@ export function createRouter({ libraryService, translationService, feedbackVerif
         const snapshot = repositories.catalogs.getSnapshot(novelId, catalogId);
         const summary = repositories.catalogs.listSnapshotsWithProgress(novelId).find((catalog) => catalog.id === catalogId);
         writeJson(response, 200, sourceCatalogDetail(snapshot, summary));
+      });
+      return;
+    }
+
+    const sourceResolutionCollectionMatch = /^\/api\/v1\/novels\/([^/]+)\/source-resolutions$/.exec(pathname);
+    if (sourceResolutionCollectionMatch) {
+      const novelId = decodePathParameter(response, sourceResolutionCollectionMatch[1]);
+      if (novelId === undefined) return;
+      if (method === 'GET') {
+        await handle(response, novelId, async () => {
+          const resolutions = new Map(repositories.resolutions.listResolutions(novelId).map((resolution) => [resolution.attemptId, resolution]));
+          const items = repositories.resolutions.listAttempts(novelId)
+            .slice(0, 100)
+            .map((attempt) => sourceResolutionSummary({ attempt, resolution: resolutions.get(attempt.id) ?? null }));
+          writeJson(response, 200, { items });
+        });
+        return;
+      }
+      if (method === 'POST') {
+        await handle(response, novelId, async () => {
+          idempotencyKey(request);
+          const result = await sourceResolutionService.resolveNovelPingChapter({
+            novelId,
+            ...sourceResolutionInput(await readObject(request))
+          });
+          if (result.attempt.state === 'failed') {
+            if (result.attempt.errorCode === 'source_fetch_failed') {
+              throw new SourceFetchError('Source resolution provider could not be fetched');
+            }
+            throw new Error('Source resolution provider failed');
+          }
+          writeJson(response, result.replayed ? 200 : 201, sourceResolutionDetail(
+            result,
+            sourceResolutionIsImportEligible(repositories, novelId, result.attempt.id)
+          ));
+        });
+        return;
+      }
+    }
+
+    const sourceResolutionMatch = /^\/api\/v1\/novels\/([^/]+)\/source-resolutions\/([^/]+)$/.exec(pathname);
+    if (method === 'GET' && sourceResolutionMatch) {
+      const novelId = decodePathParameter(response, sourceResolutionMatch[1]);
+      if (novelId === undefined) return;
+      const attemptId = decodePathParameter(response, sourceResolutionMatch[2]);
+      if (attemptId === undefined) return;
+      await handle(response, attemptId, async () => {
+        const detail = repositories.resolutions.getAttempt(novelId, attemptId);
+        writeJson(response, 200, sourceResolutionDetail(
+          detail,
+          sourceResolutionIsImportEligible(repositories, novelId, attemptId)
+        ));
+      });
+      return;
+    }
+
+    const sourceResolutionImportMatch = /^\/api\/v1\/novels\/([^/]+)\/source-resolutions\/([^/]+)\/catalog-import$/.exec(pathname);
+    if (method === 'POST' && sourceResolutionImportMatch) {
+      const novelId = decodePathParameter(response, sourceResolutionImportMatch[1]);
+      if (novelId === undefined) return;
+      const attemptId = decodePathParameter(response, sourceResolutionImportMatch[2]);
+      if (attemptId === undefined) return;
+      await handle(response, attemptId, async () => {
+        const target = sourceResolutionImportTarget(repositories, novelId, attemptId);
+        const result = await jobService.createSourceImportCatalogJob({
+          novelId,
+          type: 'source_import_catalog',
+          target
+        }, idempotencyKey(request));
+        writeJson(response, result.created ? 201 : 200, result.job);
       });
       return;
     }
