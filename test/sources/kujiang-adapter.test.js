@@ -217,6 +217,85 @@ test('fetches exactly one catalog document, preserves fetch guards, and revalida
   );
 });
 
+test('discovers configured alias-matched catalog candidates in memory with their exact ordinal entry', async () => {
+  const calls = [];
+  const adapter = createKujiangAdapter({
+    fetch: async (url) => {
+      calls.push(url);
+      return htmlResponse(await readFile(new URL('../fixtures/kujiang/catalog.html', import.meta.url), 'utf8'));
+    },
+    candidateIdentities: [{
+      bookUrl,
+      novelTitle: '战神狂飙',
+      novelTitleAliases: ['return of the war god'],
+      author: '天蚕土豆',
+      authorAliases: ['tian can tu dou'],
+      chapterTitleAliases: { '101': ['lamp fire'] }
+    }, {
+      bookUrl: 'https://www.kujiang.com/book/10',
+      novelTitle: '其他小说',
+      novelTitleAliases: ['another novel']
+    }]
+  });
+
+  const candidates = await adapter.discoverCatalogCandidates({ novelTitle: 'return of the war god', author: 'tian can tu dou' }, 2);
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls, [`${bookUrl}/catalog`]);
+  assert.equal(candidates.length, 1);
+  assert.deepEqual(candidates[0].entry, {
+    ordinal: 2,
+    externalChapterId: '101',
+    sourceUrl: 'https://www.kujiang.com/book/9/101',
+    normalizedUrl: 'https://www.kujiang.com/book/9/101',
+    sourceTitle: '第二章 灯火'
+  });
+  assert.equal(candidates[0].chapterNumber, 2);
+  assert.deepEqual(candidates[0].chapterTitleAliases, ['lamp fire']);
+  assert.equal(candidates[0].catalog.entries.length, 3);
+  assert.equal(candidates[0].canonicalBookUrl, bookUrl);
+});
+
+test('rejects unnormalized evidence and unsafe or unbounded candidate identities without fetching', async () => {
+  const adapter = createKujiangAdapter({
+    fetch: async () => {
+      throw new Error('must not fetch');
+    },
+    candidateIdentities: [{
+      bookUrl,
+      novelTitle: '战神狂飙',
+      novelTitleAliases: ['return of the war god']
+    }]
+  });
+
+  await assert.rejects(() => adapter.discoverCatalogCandidates({ novelTitle: 'Return Of The War God' }, 1), ValidationError);
+  await assert.rejects(() => adapter.discoverCatalogCandidates({ novelTitle: 'return of the war god' }, 0), ValidationError);
+  assert.throws(() => createKujiangAdapter({ fetch: async () => htmlResponse(''), candidateIdentities: [{ bookUrl: 'https://example.com/book/9', novelTitle: 'x' }] }), ValidationError);
+  assert.throws(() => createKujiangAdapter({
+    fetch: async () => htmlResponse(''),
+    candidateIdentities: [
+      { bookUrl, novelTitle: 'x' },
+      { bookUrl, novelTitle: 'y' }
+    ]
+  }), ValidationError);
+  assert.throws(() => createKujiangAdapter({
+    fetch: async () => htmlResponse(''),
+    candidateIdentities: Array.from({ length: 5 }, (_, index) => ({
+      bookUrl: `https://www.kujiang.com/book/${index + 1}`,
+      novelTitle: `novel ${index + 1}`
+    }))
+  }), ValidationError);
+});
+
+test('returns no candidate when the matched configured catalog has no requested ordinal', async () => {
+  const adapter = createKujiangAdapter({
+    fetch: async () => htmlResponse(await readFile(new URL('../fixtures/kujiang/catalog.html', import.meta.url), 'utf8')),
+    candidateIdentities: [{ bookUrl, novelTitle: '战神狂飙', novelTitleAliases: ['return of the war god'] }]
+  });
+
+  assert.deepEqual(await adapter.discoverCatalogCandidates({ novelTitle: 'return of the war god' }, 4), []);
+});
+
 test('maps timeout, non-OK, oversized, and malformed source responses to retryable errors', async () => {
   const timeoutAdapter = createKujiangAdapter({
     fetch: async (_url, { signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))),

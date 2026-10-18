@@ -1,9 +1,11 @@
 import { SourceFetchError, ValidationError } from '../domain/errors.js';
+import { normalizeResolutionText } from './source-resolution-scoring.js';
 
 const SITE = 'kujiang';
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 export const DEFAULT_MAX_CATALOG_ENTRIES = 5_000;
+export const DEFAULT_MAX_CATALOG_CANDIDATES = 4;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 3;
 
@@ -132,6 +134,71 @@ function chapterIds(normalizedUrl) {
 
 function bookId(normalizedBookUrl) {
   return new URL(normalizedBookUrl).pathname.match(/^\/book\/([1-9]\d*)$/)[1];
+}
+
+function requirePositiveInteger(value, name) {
+  if (!Number.isSafeInteger(value) || value < 1) throw new ValidationError(`${name} must be a positive integer`);
+  return value;
+}
+
+function requireAliasArray(value, name) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((alias) => typeof alias !== 'string' || !alias.trim())) {
+    throw new ValidationError(`${name} must be an array of non-empty strings`);
+  }
+  return [...new Set(value.map((alias) => alias.trim()))];
+}
+
+function requireNormalizedEvidence(evidence) {
+  if (evidence === null || typeof evidence !== 'object' || Array.isArray(evidence)) {
+    throw new ValidationError('normalized novel evidence must be an object');
+  }
+  if (typeof evidence.novelTitle !== 'string' || !evidence.novelTitle || normalizeResolutionText(evidence.novelTitle) !== evidence.novelTitle) {
+    throw new ValidationError('normalized novel evidence novelTitle is required');
+  }
+  if (evidence.author !== null && evidence.author !== undefined && (
+    typeof evidence.author !== 'string' || !evidence.author || normalizeResolutionText(evidence.author) !== evidence.author
+  )) {
+    throw new ValidationError('normalized novel evidence author must be normalized text or null');
+  }
+  return evidence;
+}
+
+function candidateIdentity(identity) {
+  if (identity === null || typeof identity !== 'object' || Array.isArray(identity)) {
+    throw new ValidationError('Kujiang candidate identity must be an object');
+  }
+  const canonicalBookUrl = canonicalizeKujiangBookUrl(identity.bookUrl);
+  if (!canonicalBookUrl) throw new ValidationError('Kujiang candidate identity has an unsupported book URL');
+  if (typeof identity.novelTitle !== 'string' || !identity.novelTitle.trim()) {
+    throw new ValidationError('Kujiang candidate identity novelTitle is required');
+  }
+  if (identity.author !== undefined && identity.author !== null && (typeof identity.author !== 'string' || !identity.author.trim())) {
+    throw new ValidationError('Kujiang candidate identity author must be text or null');
+  }
+  const chapterTitleAliases = identity.chapterTitleAliases ?? {};
+  if (chapterTitleAliases === null || typeof chapterTitleAliases !== 'object' || Array.isArray(chapterTitleAliases)) {
+    throw new ValidationError('Kujiang candidate identity chapterTitleAliases must be an object');
+  }
+  const normalizedChapterTitleAliases = {};
+  for (const [externalChapterId, aliases] of Object.entries(chapterTitleAliases)) {
+    if (!/^[1-9]\d*$/.test(externalChapterId)) throw new ValidationError('Kujiang candidate identity chapterTitleAliases keys must be chapter IDs');
+    normalizedChapterTitleAliases[externalChapterId] = requireAliasArray(aliases, 'Kujiang candidate identity chapterTitleAliases values');
+  }
+  return {
+    canonicalBookUrl,
+    novelTitle: identity.novelTitle.trim(),
+    novelTitleAliases: requireAliasArray(identity.novelTitleAliases, 'Kujiang candidate identity novelTitleAliases'),
+    author: identity.author === undefined ? null : identity.author === null ? null : identity.author.trim(),
+    authorAliases: requireAliasArray(identity.authorAliases, 'Kujiang candidate identity authorAliases'),
+    chapterTitleAliases: normalizedChapterTitleAliases
+  };
+}
+
+function matchesNovelEvidence(identity, evidence) {
+  return [identity.novelTitle, ...identity.novelTitleAliases]
+    .map(normalizeResolutionText)
+    .includes(evidence.novelTitle);
 }
 
 function chapterContentElement(html) {
@@ -479,10 +546,45 @@ async function fetchHtml(fetchClient, normalizedUrl, timeoutMs, maxBodyBytes, ca
   throw new SourceFetchError('Kujiang source redirect limit was reached');
 }
 
-export function createKujiangAdapter({ fetch, timeoutMs = DEFAULT_TIMEOUT_MS, maxBodyBytes = DEFAULT_MAX_BODY_BYTES, maxCatalogEntries = DEFAULT_MAX_CATALOG_ENTRIES }) {
+export function createKujiangAdapter({
+  fetch,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
+  maxCatalogEntries = DEFAULT_MAX_CATALOG_ENTRIES,
+  candidateIdentities = [],
+  maxCatalogCandidates = DEFAULT_MAX_CATALOG_CANDIDATES
+}) {
   if (!Number.isSafeInteger(maxCatalogEntries) || maxCatalogEntries < 1) {
     throw new ValidationError('maxCatalogEntries must be a positive integer');
   }
+  if (!Number.isSafeInteger(maxCatalogCandidates) || maxCatalogCandidates < 1) {
+    throw new ValidationError('maxCatalogCandidates must be a positive integer');
+  }
+  if (!Array.isArray(candidateIdentities) || candidateIdentities.length > maxCatalogCandidates) {
+    throw new ValidationError('candidateIdentities must be a bounded array');
+  }
+  const configuredCandidates = candidateIdentities.map(candidateIdentity);
+  if (new Set(configuredCandidates.map(({ canonicalBookUrl }) => canonicalBookUrl)).size !== configuredCandidates.length) {
+    throw new ValidationError('candidateIdentities must not contain duplicate book URLs');
+  }
+
+  async function fetchCatalog(bookUrl) {
+    const normalizedBookUrl = canonicalizeKujiangBookUrl(bookUrl);
+    if (!normalizedBookUrl) throw new ValidationError('unsupported Kujiang book URL');
+    const catalogUrl = `${normalizedBookUrl}/catalog`;
+    const canonicalizeCatalogRedirect = (value) => {
+      const normalizedUrl = canonicalizeKujiangCatalogUrl(value);
+      return normalizedUrl === catalogUrl ? catalogUrl : null;
+    };
+    try {
+      const html = await fetchHtml(fetch, catalogUrl, timeoutMs, maxBodyBytes, canonicalizeCatalogRedirect);
+      return parseKujiangCatalogHtml(html, normalizedBookUrl, maxCatalogEntries);
+    } catch (error) {
+      if (error instanceof SourceFetchError || error instanceof ValidationError) throw error;
+      throw new SourceFetchError('Kujiang source catalog could not be parsed', { cause: error });
+    }
+  }
+
   return {
     site: SITE,
     supports(sourceUrl) {
@@ -502,21 +604,33 @@ export function createKujiangAdapter({ fetch, timeoutMs = DEFAULT_TIMEOUT_MS, ma
         throw new SourceFetchError('Kujiang source content could not be parsed', { cause: error });
       }
     },
-    async fetchCatalog(bookUrl) {
-      const normalizedBookUrl = canonicalizeKujiangBookUrl(bookUrl);
-      if (!normalizedBookUrl) throw new ValidationError('unsupported Kujiang book URL');
-      const catalogUrl = `${normalizedBookUrl}/catalog`;
-      const canonicalizeCatalogRedirect = (value) => {
-        const normalizedUrl = canonicalizeKujiangCatalogUrl(value);
-        return normalizedUrl === catalogUrl ? catalogUrl : null;
-      };
-      try {
-        const html = await fetchHtml(fetch, catalogUrl, timeoutMs, maxBodyBytes, canonicalizeCatalogRedirect);
-        return parseKujiangCatalogHtml(html, normalizedBookUrl, maxCatalogEntries);
-      } catch (error) {
-        if (error instanceof SourceFetchError || error instanceof ValidationError) throw error;
-        throw new SourceFetchError('Kujiang source catalog could not be parsed', { cause: error });
+    fetchCatalog,
+    async discoverCatalogCandidates(evidence, requestedChapterNumber) {
+      const normalizedEvidence = requireNormalizedEvidence(evidence);
+      const chapterNumber = requirePositiveInteger(requestedChapterNumber, 'requested chapter number');
+      const matches = configuredCandidates.filter((identity) => matchesNovelEvidence(identity, normalizedEvidence));
+      const candidates = [];
+      for (const identity of matches) {
+        const catalog = await fetchCatalog(identity.canonicalBookUrl);
+        const entry = catalog.entries.find((catalogEntry) => catalogEntry.ordinal === chapterNumber);
+        if (!entry) continue;
+        candidates.push({
+          id: identity.canonicalBookUrl,
+          site: catalog.site,
+          canonicalBookUrl: catalog.canonicalBookUrl,
+          externalNovelId: catalog.externalNovelId,
+          novelTitle: identity.novelTitle,
+          novelTitleAliases: identity.novelTitleAliases,
+          author: identity.author,
+          authorAliases: identity.authorAliases,
+          chapterNumber,
+          chapterTitle: entry.sourceTitle,
+          chapterTitleAliases: identity.chapterTitleAliases[entry.externalChapterId] ?? [],
+          catalog,
+          entry
+        });
       }
+      return candidates;
     }
   };
 }
