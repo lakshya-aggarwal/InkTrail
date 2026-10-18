@@ -3,6 +3,9 @@ info:
   title: InkTrail Foundation API
   version: 1.0.0
   description: Local-first novel library and reader API.
+  license:
+    name: No license granted
+    url: https://choosealicense.com/no-permission/
 servers:
   - url: http://127.0.0.1:4277
 security: []
@@ -23,6 +26,8 @@ paths:
                   status:
                     type: string
                     example: ok
+        '4XX':
+          description: Malformed HTTP requests can be rejected by Node before InkTrail routes them. No InkTrail JSON error body is guaranteed.
   /api/v1/novels:
     get:
       operationId: listNovels
@@ -40,6 +45,10 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/NovelDetail'
+        '4XX':
+          description: Malformed HTTP requests can be rejected by Node before InkTrail routes them. No InkTrail JSON error body is guaranteed.
+        '500':
+          $ref: '#/components/responses/InternalError'
     post:
       operationId: createNovel
       summary: Create a novel
@@ -246,6 +255,7 @@ paths:
     post:
       operationId: resolveNovelPingSource
       summary: Resolve one canonical NovelPing chapter to an accepted source catalog
+      description: Replay is determined by the canonical NovelPing URL, extracted evidence hash, and resolver version. The optional Idempotency-Key header is validated but does not determine source-resolution replay.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -776,6 +786,7 @@ components:
       schema:
         type: string
         minLength: 1
+        pattern: '.*\\S.*'
         maxLength: 500
   responses:
     ValidationError:
@@ -825,7 +836,7 @@ components:
               message: Translation provider could not complete the request
               retryable: true
     InternalError:
-      description: Unexpected source import failure. This error is retryable.
+      description: Unexpected server failure. This error is retryable.
       content:
         application/json:
           schema:
