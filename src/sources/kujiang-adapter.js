@@ -557,8 +557,8 @@ export function createKujiangAdapter({
   if (!Number.isSafeInteger(maxCatalogEntries) || maxCatalogEntries < 1) {
     throw new ValidationError('maxCatalogEntries must be a positive integer');
   }
-  if (!Number.isSafeInteger(maxCatalogCandidates) || maxCatalogCandidates < 1) {
-    throw new ValidationError('maxCatalogCandidates must be a positive integer');
+  if (!Number.isSafeInteger(maxCatalogCandidates) || maxCatalogCandidates < 1 || maxCatalogCandidates > DEFAULT_MAX_CATALOG_CANDIDATES) {
+    throw new ValidationError(`maxCatalogCandidates must be a positive integer no greater than ${DEFAULT_MAX_CATALOG_CANDIDATES}`);
   }
   if (!Array.isArray(candidateIdentities) || candidateIdentities.length > maxCatalogCandidates) {
     throw new ValidationError('candidateIdentities must be a bounded array');

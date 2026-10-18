@@ -257,10 +257,13 @@ test('discovers configured alias-matched catalog candidates in memory with their
 });
 
 test('rejects unnormalized evidence and unsafe or unbounded candidate identities without fetching', async () => {
+  let fetchCalls = 0;
+  const fetch = async () => {
+    fetchCalls += 1;
+    throw new Error('must not fetch');
+  };
   const adapter = createKujiangAdapter({
-    fetch: async () => {
-      throw new Error('must not fetch');
-    },
+    fetch,
     candidateIdentities: [{
       bookUrl,
       novelTitle: '战神狂飙',
@@ -279,12 +282,21 @@ test('rejects unnormalized evidence and unsafe or unbounded candidate identities
     ]
   }), ValidationError);
   assert.throws(() => createKujiangAdapter({
-    fetch: async () => htmlResponse(''),
+    fetch,
     candidateIdentities: Array.from({ length: 5 }, (_, index) => ({
       bookUrl: `https://www.kujiang.com/book/${index + 1}`,
       novelTitle: `novel ${index + 1}`
     }))
   }), ValidationError);
+  assert.throws(() => createKujiangAdapter({
+    fetch,
+    maxCatalogCandidates: 5,
+    candidateIdentities: Array.from({ length: 5 }, (_, index) => ({
+      bookUrl: `https://www.kujiang.com/book/${index + 1}`,
+      novelTitle: `novel ${index + 1}`
+    }))
+  }), ValidationError);
+  assert.equal(fetchCalls, 0);
 });
 
 test('returns no candidate when the matched configured catalog has no requested ordinal', async () => {
