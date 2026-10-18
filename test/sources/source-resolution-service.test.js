@@ -135,6 +135,33 @@ test('replays terminal evidence without a duplicate candidate-provider call', as
   assert.equal(count(repositories.database, 'source_resolution_attempts'), 1);
 });
 
+test('coalesces concurrent equivalent requests before catalog discovery', async (t) => {
+  const repositories = createRepositories();
+  t.after(() => repositories.database.close());
+  const novel = repositories.novels.createNovel({ title: 'Reader novel' });
+  let providerCalls = 0;
+  let discoveryStarted;
+  const started = new Promise((resolve) => { discoveryStarted = resolve; });
+  let releaseDiscovery;
+  const discoveryGate = new Promise((resolve) => { releaseDiscovery = resolve; });
+  const service = createService(repositories, async () => {
+    providerCalls += 1;
+    discoveryStarted();
+    await discoveryGate;
+    return [];
+  });
+
+  const first = service.resolveNovelPingChapter({ novelId: novel.id, novelPingUrl: chapterUrl });
+  await started;
+  const second = service.resolveNovelPingChapter({ novelId: novel.id, novelPingUrl: chapterUrl });
+  assert.equal(providerCalls, 1);
+  releaseDiscovery();
+
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  assert.equal(firstResult.attempt.id, secondResult.attempt.id);
+  assert.equal(count(repositories.database, 'source_resolution_attempts'), 1);
+});
+
 test('records ownership collisions without replacing the existing source', async (t) => {
   const repositories = createRepositories();
   t.after(() => repositories.database.close());
@@ -157,6 +184,29 @@ test('records ownership collisions without replacing the existing source', async
   assert.equal(result.attempt.errorCode, 'source_ownership_conflict');
   assert.equal(count(repositories.database, 'novel_sources'), 1);
   assert.equal(count(repositories.database, 'source_catalogs'), 0);
+});
+
+test('rejects a different Kujiang book already associated with the same novel', async (t) => {
+  const repositories = createRepositories();
+  t.after(() => repositories.database.close());
+  const novel = repositories.novels.createNovel({ title: 'Reader novel' });
+  repositories.sources.createOrGetNovelSource({
+    novelId: novel.id,
+    site: 'kujiang',
+    externalNovelId: '8',
+    sourceUrl: 'https://www.kujiang.com/book/8',
+    normalizedUrl: 'https://www.kujiang.com/book/8',
+    title: 'Manual source'
+  });
+  const service = createService(repositories, async () => [candidate()]);
+
+  const result = await service.resolveNovelPingChapter({ novelId: novel.id, novelPingUrl: chapterUrl });
+
+  assert.equal(result.attempt.state, 'unresolved');
+  assert.equal(result.attempt.errorCode, 'source_ownership_conflict');
+  assert.equal(count(repositories.database, 'novel_sources'), 1);
+  assert.equal(count(repositories.database, 'source_catalogs'), 0);
+  assert.equal(count(repositories.database, 'novel_source_resolutions'), 0);
 });
 
 test('rolls back source and catalog writes when the accepted transaction fails', async (t) => {

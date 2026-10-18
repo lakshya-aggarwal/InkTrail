@@ -51,6 +51,9 @@ function safeEvidenceJson(evidence) {
 }
 
 function sourceIdentityConflict(repositories, novelId, candidate) {
+  const existingSources = repositories.sources.listNovelSourcesForSite({ novelId, site: candidate.site });
+  if (existingSources.some((source) => source.normalizedUrl !== candidate.canonicalBookUrl)) return true;
+
   const existingSource = repositories.sources.findNovelSourceByCanonicalUrl({
     site: candidate.site,
     normalizedUrl: candidate.canonicalBookUrl
@@ -72,6 +75,8 @@ export function createSourceResolutionService({ database, repositories, novelPin
     return repositories.resolutions.createOrGetTerminalAttempt(input);
   }
 
+  const inFlightResolutions = new Map();
+
   return {
     async resolveNovelPingChapter(input) {
       const value = requireObject(input);
@@ -89,104 +94,45 @@ export function createSourceResolutionService({ database, repositories, novelPin
       });
       if (replay) return replay;
 
-      let candidates;
-      try {
-        candidates = (await Promise.all(catalogAdapters.map((adapter) => adapter.discoverCatalogCandidates(evidence, evidence.chapterNumber)))).flat();
-      } catch (error) {
-        return persistTerminal({
-          novelId,
-          canonicalNovelPingUrl: evidence.canonicalNovelPingUrl,
-          evidenceJson: safeEvidenceJson(evidence),
-          evidenceHash: evidence.evidenceHash,
-          resolverVersion: evidence.extractorVersion,
-          state: 'failed',
-          errorCode: error instanceof SourceFetchError ? 'source_fetch_failed' : 'resolution_failed',
-          candidates: []
-        });
-      }
+      const replayKey = JSON.stringify([novelId, evidence.canonicalNovelPingUrl, evidence.evidenceHash, evidence.extractorVersion]);
+      const inFlight = inFlightResolutions.get(replayKey);
+      if (inFlight) return inFlight;
 
-      const scored = scoreResolutionCandidates(evidence, candidates);
-      const observations = scored.candidates.map((score) => safeCandidate(candidates.find((candidate) => candidate.id === score.candidateId), score));
-      if (scored.decision !== 'accepted') {
-        return persistTerminal({
-          novelId,
-          canonicalNovelPingUrl: evidence.canonicalNovelPingUrl,
-          evidenceJson: safeEvidenceJson(evidence),
-          evidenceHash: evidence.evidenceHash,
-          resolverVersion: evidence.extractorVersion,
-          state: 'unresolved',
-          errorCode: 'resolution_unverified',
-          candidates: observations
-        });
-      }
-
-      const winnerIndex = candidates.findIndex((candidate) => candidate.id === scored.selectedCandidateId);
-      const winner = candidates[winnerIndex];
-      if (!winner || sourceIdentityConflict(repositories, novelId, winner)) {
-        return persistTerminal({
-          novelId,
-          canonicalNovelPingUrl: evidence.canonicalNovelPingUrl,
-          evidenceJson: safeEvidenceJson(evidence),
-          evidenceHash: evidence.evidenceHash,
-          resolverVersion: evidence.extractorVersion,
-          state: 'unresolved',
-          errorCode: 'source_ownership_conflict',
-          candidates: observations
-        });
-      }
-
-      try {
-        return repositories.resolutions.withinTransaction(() => {
-          const transactionReplay = repositories.resolutions.findTerminalAttemptByReplay({
-            novelId,
-            canonicalNovelPingUrl: evidence.canonicalNovelPingUrl,
-            evidenceHash: evidence.evidenceHash,
-            resolverVersion: evidence.extractorVersion
-          });
-          if (transactionReplay) return transactionReplay;
-          if (sourceIdentityConflict(repositories, novelId, winner)) throw new ConflictError('source ownership conflicts with accepted resolution');
-
-          const source = repositories.sources.createOrGetNovelSource({
-            novelId,
-            site: winner.site,
-            externalNovelId: winner.externalNovelId,
-            sourceUrl: winner.canonicalBookUrl,
-            normalizedUrl: winner.canonicalBookUrl,
-            title: winner.novelTitle
-          });
-          const snapshot = repositories.catalogs.createOrGetSnapshotInTransaction({
-            novelId,
-            novelSourceId: source.id,
-            site: winner.site,
-            canonicalBookUrl: winner.canonicalBookUrl,
-            contentSha256: catalogContentSha256(winner.catalog.entries),
-            entries: winner.catalog.entries
-          });
-          const catalogEntry = snapshot.entries.find((entry) => entry.ordinal === winner.entry.ordinal && entry.externalChapterId === winner.entry.externalChapterId);
-          if (!catalogEntry) throw new ConflictError('accepted catalog no longer contains the matched chapter');
-          const acceptedCandidates = observations.map((candidate) => candidate.id === scored.selectedCandidateId ? { ...candidate, catalogId: snapshot.catalog.id } : candidate);
-          const attempt = repositories.resolutions.createOrGetTerminalAttemptInTransaction({
+      const resolution = Promise.resolve().then(async () => {
+        let candidates;
+        try {
+          candidates = (await Promise.all(catalogAdapters.map((adapter) => adapter.discoverCatalogCandidates(evidence, evidence.chapterNumber)))).flat();
+        } catch (error) {
+          return persistTerminal({
             novelId,
             canonicalNovelPingUrl: evidence.canonicalNovelPingUrl,
             evidenceJson: safeEvidenceJson(evidence),
             evidenceHash: evidence.evidenceHash,
             resolverVersion: evidence.extractorVersion,
-            state: 'resolved',
-            selectedCandidateId: scored.selectedCandidateId,
-            candidates: acceptedCandidates
+            state: 'failed',
+            errorCode: error instanceof SourceFetchError ? 'source_fetch_failed' : 'resolution_failed',
+            candidates: []
           });
-          const resolution = repositories.resolutions.createAcceptedResolutionInTransaction({
+        }
+
+        const scored = scoreResolutionCandidates(evidence, candidates);
+        const observations = scored.candidates.map((score) => safeCandidate(candidates.find((candidate) => candidate.id === score.candidateId), score));
+        if (scored.decision !== 'accepted') {
+          return persistTerminal({
             novelId,
-            attemptId: attempt.attempt.id,
-            candidateId: scored.selectedCandidateId,
-            novelSourceId: source.id,
-            catalogId: snapshot.catalog.id,
-            catalogEntryId: catalogEntry.id
+            canonicalNovelPingUrl: evidence.canonicalNovelPingUrl,
+            evidenceJson: safeEvidenceJson(evidence),
+            evidenceHash: evidence.evidenceHash,
+            resolverVersion: evidence.extractorVersion,
+            state: 'unresolved',
+            errorCode: 'resolution_unverified',
+            candidates: observations
           });
-          return { ...attempt, resolution };
-        });
-      } catch (error) {
-        if (error instanceof ConflictError) {
+        }
+
+        const winnerIndex = candidates.findIndex((candidate) => candidate.id === scored.selectedCandidateId);
+        const winner = candidates[winnerIndex];
+        if (!winner || sourceIdentityConflict(repositories, novelId, winner)) {
           return persistTerminal({
             novelId,
             canonicalNovelPingUrl: evidence.canonicalNovelPingUrl,
@@ -198,16 +144,87 @@ export function createSourceResolutionService({ database, repositories, novelPin
             candidates: observations
           });
         }
-        return persistTerminal({
-          novelId,
-          canonicalNovelPingUrl: evidence.canonicalNovelPingUrl,
-          evidenceJson: safeEvidenceJson(evidence),
-          evidenceHash: evidence.evidenceHash,
-          resolverVersion: evidence.extractorVersion,
-          state: 'failed',
-          errorCode: 'resolution_failed',
-          candidates: []
-        });
+
+        try {
+          return repositories.resolutions.withinTransaction(() => {
+            const transactionReplay = repositories.resolutions.findTerminalAttemptByReplay({
+              novelId,
+              canonicalNovelPingUrl: evidence.canonicalNovelPingUrl,
+              evidenceHash: evidence.evidenceHash,
+              resolverVersion: evidence.extractorVersion
+            });
+            if (transactionReplay) return transactionReplay;
+            if (sourceIdentityConflict(repositories, novelId, winner)) throw new ConflictError('source ownership conflicts with accepted resolution');
+
+            const source = repositories.sources.createOrGetNovelSource({
+              novelId,
+              site: winner.site,
+              externalNovelId: winner.externalNovelId,
+              sourceUrl: winner.canonicalBookUrl,
+              normalizedUrl: winner.canonicalBookUrl,
+              title: winner.novelTitle
+            });
+            const snapshot = repositories.catalogs.createOrGetSnapshotInTransaction({
+              novelId,
+              novelSourceId: source.id,
+              site: winner.site,
+              canonicalBookUrl: winner.canonicalBookUrl,
+              contentSha256: catalogContentSha256(winner.catalog.entries),
+              entries: winner.catalog.entries
+            });
+            const catalogEntry = snapshot.entries.find((entry) => entry.ordinal === winner.entry.ordinal && entry.externalChapterId === winner.entry.externalChapterId);
+            if (!catalogEntry) throw new ConflictError('accepted catalog no longer contains the matched chapter');
+            const acceptedCandidates = observations.map((candidate) => candidate.id === scored.selectedCandidateId ? { ...candidate, catalogId: snapshot.catalog.id } : candidate);
+            const attempt = repositories.resolutions.createOrGetTerminalAttemptInTransaction({
+              novelId,
+              canonicalNovelPingUrl: evidence.canonicalNovelPingUrl,
+              evidenceJson: safeEvidenceJson(evidence),
+              evidenceHash: evidence.evidenceHash,
+              resolverVersion: evidence.extractorVersion,
+              state: 'resolved',
+              selectedCandidateId: scored.selectedCandidateId,
+              candidates: acceptedCandidates
+            });
+            const resolution = repositories.resolutions.createAcceptedResolutionInTransaction({
+              novelId,
+              attemptId: attempt.attempt.id,
+              candidateId: scored.selectedCandidateId,
+              novelSourceId: source.id,
+              catalogId: snapshot.catalog.id,
+              catalogEntryId: catalogEntry.id
+            });
+            return { ...attempt, resolution };
+          });
+        } catch (error) {
+          if (error instanceof ConflictError) {
+            return persistTerminal({
+              novelId,
+              canonicalNovelPingUrl: evidence.canonicalNovelPingUrl,
+              evidenceJson: safeEvidenceJson(evidence),
+              evidenceHash: evidence.evidenceHash,
+              resolverVersion: evidence.extractorVersion,
+              state: 'unresolved',
+              errorCode: 'source_ownership_conflict',
+              candidates: observations
+            });
+          }
+          return persistTerminal({
+            novelId,
+            canonicalNovelPingUrl: evidence.canonicalNovelPingUrl,
+            evidenceJson: safeEvidenceJson(evidence),
+            evidenceHash: evidence.evidenceHash,
+            resolverVersion: evidence.extractorVersion,
+            state: 'failed',
+            errorCode: 'resolution_failed',
+            candidates: []
+          });
+        }
+      });
+      inFlightResolutions.set(replayKey, resolution);
+      try {
+        return await resolution;
+      } finally {
+        if (inFlightResolutions.get(replayKey) === resolution) inFlightResolutions.delete(replayKey);
       }
     }
   };
