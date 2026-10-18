@@ -204,6 +204,16 @@ export function createSourceResolutionRepository(database, clock) {
   }
 
   return {
+    findTerminalAttemptByReplay(input) {
+      const value = requireObject(input);
+      const novelId = requireText(value.novelId, 'novelId');
+      const canonicalNovelPingUrl = requireText(value.canonicalNovelPingUrl, 'canonicalNovelPingUrl');
+      const evidenceHash = requireSha256(value.evidenceHash, 'evidenceHash');
+      const resolverVersion = requireText(value.resolverVersion, 'resolverVersion');
+      const replay = attemptByReplay.get(novelId, canonicalNovelPingUrl, evidenceHash, resolverVersion);
+      return replay ? { ...getAttempt(novelId, replay.id), replayed: true } : null;
+    },
+
     createOrGetTerminalAttempt(input) {
       if (requireObject(input).state === 'resolved') {
         throw new ValidationError('resolved attempts require an atomic resolution transaction');

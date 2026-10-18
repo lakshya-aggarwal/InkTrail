@@ -123,6 +123,12 @@ export function createSourceRepository(database, clock) {
       return novelSourcesByNovelAndSite.all(normalizedNovelId, requireText(site, 'site')).map(toNovelSource);
     },
 
+    findNovelSourceByCanonicalUrl(input) {
+      const { site, normalizedUrl } = requireObject(input);
+      const row = novelSourceByCanonicalUrl.get(requireText(site, 'site'), requireText(normalizedUrl, 'normalizedUrl'));
+      return row ? toNovelSource(row) : null;
+    },
+
     createChapterSource(input) {
       const {
         novelId, chapterId, novelSourceId, site, externalChapterId, sourceUrl,
