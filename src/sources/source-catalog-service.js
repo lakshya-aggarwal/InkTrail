@@ -38,6 +38,10 @@ function withinTransaction(database, action) {
 }
 
 export function createSourceCatalogService({ database, repositories, catalogAdapter }) {
+  if (typeof repositories.sourceIdentities?.findOwnerNovelIdByCanonicalBookUrl !== 'function') {
+    throw new ValidationError('source identity repository is required');
+  }
+
   async function discoverCatalogSnapshot(input) {
     const { novelId, bookUrl } = requireObject(input);
     const normalizedNovelId = requireText(novelId, 'novelId');
@@ -48,6 +52,10 @@ export function createSourceCatalogService({ database, repositories, catalogAdap
     const contentSha256 = catalogContentSha256(entries);
 
     return withinTransaction(database, () => {
+      const identityOwnerNovelId = repositories.sourceIdentities.findOwnerNovelIdByCanonicalBookUrl(fetched.canonicalBookUrl);
+      if (identityOwnerNovelId && identityOwnerNovelId !== normalizedNovelId) {
+        throw new ConflictError('Kujiang source identity belongs to another novel');
+      }
       const existingSources = repositories.sources.listNovelSourcesForSite({ novelId: normalizedNovelId, site: fetched.site });
       if (existingSources.some((source) => source.normalizedUrl !== fetched.canonicalBookUrl)) {
         throw new ConflictError('novel already has a different Kujiang book source');

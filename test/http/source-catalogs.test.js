@@ -96,6 +96,24 @@ test('source catalog routes contain validation, fetch, and ownership failures', 
   });
 });
 
+test('source catalog discovery rejects a Kujiang book reserved by another novel identity', async () => {
+  const firstNovel = await requestJson('POST', '/api/v1/novels', { title: 'Reserved source' });
+  const secondNovel = await requestJson('POST', '/api/v1/novels', { title: 'Catalog target' });
+  const identity = await requestJson('POST', `/api/v1/novels/${firstNovel.body.id}/source-identities`, {
+    bookUrl,
+    novelTitle: 'Reserved source'
+  });
+  const rejected = await requestJson('POST', `/api/v1/novels/${secondNovel.body.id}/source-catalogs`, { bookUrl });
+  const catalogs = await requestJson('GET', `/api/v1/novels/${secondNovel.body.id}/source-catalogs`);
+
+  assert.equal(identity.status, 201);
+  assert.deepEqual(rejected, {
+    status: 409,
+    body: { error: { code: 'conflict', message: 'Kujiang source identity belongs to another novel', retryable: false } }
+  });
+  assert.deepEqual(catalogs.body.items, []);
+});
+
 test('source import jobs use catalog targets, preserve idempotency, and update catalog progress', async () => {
   const novel = await requestJson('POST', '/api/v1/novels', { title: 'Import Trail' });
   const catalog = await requestJson('POST', `/api/v1/novels/${novel.body.id}/source-catalogs`, { bookUrl });

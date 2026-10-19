@@ -17,6 +17,12 @@ second InkTrail novel. SQLite foreign keys restrict deletion of the owning
 novel while identities remain, and the repository validates structured alias
 data before writing it.
 
+A Kujiang canonical book URL also has one owner across the identity registry
+and durable `novel_sources`. Direct catalog discovery rejects an identity
+reserved by another novel before it creates a source or catalog, and SQLite
+triggers enforce the same rule for direct insertions in either table. Existing
+data is left untouched by this additive guard.
+
 `POST /api/v1/novels/{novelId}/source-identities` accepts only the documented
 identity fields. `GET` lists a novel's identities, and `DELETE` removes one
 identity in the same novel scope. There is no update endpoint: a correction is

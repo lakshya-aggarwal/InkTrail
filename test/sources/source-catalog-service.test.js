@@ -8,6 +8,7 @@ import { ConflictError } from '../../src/domain/errors.js';
 import { createNovelRepository } from '../../src/novels/novel-repository.js';
 import { createSourceCatalogRepository } from '../../src/sources/source-catalog-repository.js';
 import { createSourceCatalogService } from '../../src/sources/source-catalog-service.js';
+import { createSourceIdentityRepository } from '../../src/sources/source-identity-repository.js';
 import { createSourceRepository } from '../../src/sources/source-repository.js';
 import { createKujiangAdapter } from '../../src/sources/kujiang-adapter.js';
 
@@ -22,7 +23,8 @@ function createRepositories() {
     novels: createNovelRepository(database, clock),
     chapters: createChapterRepository(database, clock),
     sources: createSourceRepository(database, clock),
-    catalogs: createSourceCatalogRepository(database, clock)
+    catalogs: createSourceCatalogRepository(database, clock),
+    sourceIdentities: createSourceIdentityRepository(database, clock)
   };
 }
 
@@ -83,6 +85,26 @@ test('does not replace or share a book source already owned by another novel', a
   assert.equal(repositories.catalogs.listSnapshots(firstNovel.id).length, 1);
   assert.equal(repositories.catalogs.listSnapshots(secondNovel.id).length, 0);
   assert.equal(repositories.database.prepare('select count(*) as count from novel_sources').get().count, 1);
+});
+
+test('rejects catalog discovery when another novel has reserved the Kujiang book identity', async (t) => {
+  const repositories = createRepositories();
+  t.after(() => repositories.database.close());
+  const firstNovel = repositories.novels.createNovel({ title: 'First' });
+  const secondNovel = repositories.novels.createNovel({ title: 'Second' });
+  repositories.sourceIdentities.create({
+    novelId: firstNovel.id,
+    bookUrl,
+    novelTitle: 'First source',
+    novelTitleAliases: ['first source'],
+    chapterTitleAliases: {}
+  });
+  const service = createService(repositories, async () => new Response(await catalogHtml(), { headers: { 'content-type': 'text/html' } }));
+
+  await assert.rejects(() => service.fetchCatalogSnapshot({ novelId: secondNovel.id, bookUrl }), ConflictError);
+
+  assert.equal(repositories.catalogs.listSnapshots(secondNovel.id).length, 0);
+  assert.equal(repositories.database.prepare('select count(*) as count from novel_sources where novel_id = ?').get(secondNovel.id).count, 0);
 });
 
 test('does not silently select a different Kujiang book for the same novel', async (t) => {

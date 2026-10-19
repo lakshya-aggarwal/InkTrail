@@ -74,6 +74,10 @@ export function createSourceIdentityRepository(database, clock) {
   return {
     list,
 
+    findOwnerNovelIdByCanonicalBookUrl(canonicalBookUrl) {
+      return byCanonicalBookUrl.get(requireText(canonicalBookUrl, 'canonicalBookUrl'))?.novel_id ?? null;
+    },
+
     listCandidateIdentities(novelId) {
       return list(novelId).map(({ canonicalBookUrl, novelTitle, novelTitleAliases, author, authorAliases, chapterTitleAliases }) => ({
         bookUrl: canonicalBookUrl,

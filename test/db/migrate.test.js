@@ -51,7 +51,7 @@ test('migrations are recorded once and source foreign keys are enforced', () => 
   migrate(database);
   migrate(database);
 
-  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 13);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 14);
   assert.throws(() => database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'missing-novel', 1, 'One', '2026-10-11T00:00:00.000Z'));
   assert.throws(() => database.prepare(`
     insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
@@ -80,6 +80,33 @@ test('source identity storage rejects malformed JSON and a fifth identity at the
     insert.run(`identity-${bookId}`, `https://www.kujiang.com/book/${bookId}`, '[]', now);
   }
   assert.throws(() => insert.run('identity-13', 'https://www.kujiang.com/book/13', '[]', now), /source identity limit reached/);
+});
+
+test('source identity ownership triggers reject direct cross-novel Kujiang insertions', () => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  const now = '2026-10-20T00:00:00.000Z';
+  migrate(database);
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-b', 'B', now, now);
+  database.prepare(`
+    insert into source_identities (
+      id, novel_id, site, canonical_book_url, novel_title, novel_title_aliases_json,
+      author, author_aliases_json, chapter_title_aliases_json, created_at
+    ) values ('identity-a', 'novel-a', 'kujiang', 'https://www.kujiang.com/book/9', 'A', '[]', null, '[]', '{}', ?)
+  `).run(now);
+  const insertSource = database.prepare(`
+    insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
+    values (?, ?, 'kujiang', ?, ?, ?, ?, ?)
+  `);
+
+  assert.throws(() => insertSource.run('source-b', 'novel-b', '9', 'https://www.kujiang.com/book/9', 'https://www.kujiang.com/book/9', now, now), /Kujiang source identity belongs to another novel/);
+  insertSource.run('source-a', 'novel-a', '10', 'https://www.kujiang.com/book/10', 'https://www.kujiang.com/book/10', now, now);
+  assert.throws(() => database.prepare(`
+    insert into source_identities (
+      id, novel_id, site, canonical_book_url, novel_title, novel_title_aliases_json,
+      author, author_aliases_json, chapter_title_aliases_json, created_at
+    ) values ('identity-b', 'novel-b', 'kujiang', 'https://www.kujiang.com/book/10', 'B', '[]', null, '[]', '{}', ?)
+  `).run(now), /Kujiang source already belongs to another novel/);
 });
 
 test('additive migration preserves existing translation revisions', (t) => {
