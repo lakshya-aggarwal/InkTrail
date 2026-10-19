@@ -1,8 +1,11 @@
 import { defineConfig } from '@playwright/test';
 
+const port = Number(process.env.PLAYWRIGHT_PORT ?? 4277);
+const baseURL = `http://127.0.0.1:${port}`;
+
 export default defineConfig({
   testDir: './test/e2e',
-  use: { baseURL: 'http://127.0.0.1:4277' },
+  use: { baseURL },
   projects: [
     {
       name: 'desktop-chromium',
@@ -21,8 +24,8 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: 'PORT=4277 node scripts/source-fixture-server.js',
-    url: 'http://127.0.0.1:4277/api/v1/health',
+    command: `PORT=${port} node scripts/source-fixture-server.js`,
+    url: `${baseURL}/api/v1/health`,
     reuseExistingServer: false
   }
 });

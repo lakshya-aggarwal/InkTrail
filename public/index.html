@@ -34,6 +34,14 @@
               <button id="create-epub" type="button">Create EPUB</button>
             </div>
           </form>
+          <form id="source-resolution-form" novalidate>
+            <label for="novelping-chapter-url">NovelPing chapter URL</label>
+            <div class="source-resolution-controls"><input autocomplete="url" id="novelping-chapter-url" inputmode="url" name="novelPingUrl" placeholder="https://novelping.com/book/..." required type="url"><button id="resolve-source" type="submit">Resolve</button></div>
+          </form>
+          <div id="source-resolution">
+            <p id="source-resolution-status" role="status"></p>
+            <button hidden id="import-resolved-source" type="button">Import source chapters</button>
+          </div>
           <form id="source-catalog-form" novalidate>
             <label for="source-book-url">Add Kujiang source</label>
             <div class="source-catalog-controls"><input autocomplete="url" id="source-book-url" inputmode="url" name="bookUrl" placeholder="https://www.kujiang.com/book/..." required type="url"><button id="discover-source-catalog" type="submit">Discover source</button></div>

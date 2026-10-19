@@ -1,5 +1,15 @@
 import { expect, test } from '@playwright/test';
 
+const novelPingFixtureUrls = Object.freeze({
+  unresolved: 'https://novelping.com/book/unknown/chapter-2-lamp-fire',
+  retryable: 'https://novelping.com/book/return-of-the-war-god/chapter-2-retry'
+});
+
+function acceptedNovelPingUrl(testInfo, sourceId) {
+  const id = (testInfo.project.name === 'desktop-chromium' ? 100 : 200) + sourceId;
+  return `https://novelping.com/book/fixture-source-${id}/chapter-2-lamp-fire`;
+}
+
 async function seedNovelWithChapters(request, { chapterNumbers, title = 'Seeded novel' }) {
   const novel = await request.post('/api/v1/novels', { data: { title } });
   const novelBody = await novel.json();
@@ -81,6 +91,8 @@ async function installWorkspaceActionSettlementObserver(page) {
   await page.addInitScript(() => {
     const observedActions = new Map([
       ['source-catalog-form', 'submit'],
+      ['source-resolution-form', 'submit'],
+      ['import-resolved-source', 'click'],
       ['import-source-catalog', 'click'],
       ['source-import-job-control', 'click']
     ]);
@@ -335,7 +347,7 @@ test('workspace queues the current sourced chapter and retains durable status af
   await expect(page.locator('#workspace-job-status')).toHaveText('Translation is completed after 1 attempt.');
 });
 
-test('workspace is hidden for local chapters and stops its active polling after navigation', async ({ page }, testInfo) => {
+test('local chapters keep source resolution available and stop source-work polling after navigation', async ({ page }, testInfo) => {
   const novel = await page.request.post('/api/v1/novels', { data: { title: 'Mixed provenance novel' } });
   const novelBody = await novel.json();
   const imported = await page.request.post(`/api/v1/novels/${novelBody.id}/source-chapters`, {
@@ -361,11 +373,149 @@ test('workspace is hidden for local chapters and stops its active polling after 
   await page.getByRole('button', { name: 'Next chapter' }).last().click();
 
   await expect(page.getByRole('heading', { name: 'Local chapter' })).toBeVisible();
-  await expect(page.locator('#translation-workspace')).toBeHidden();
+  await expect(page.locator('#translation-workspace')).toBeVisible();
+  await expect(page.getByLabel('NovelPing chapter URL')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Queue translation' })).toBeHidden();
   await expect(page.getByRole('button', { name: 'Create EPUB' })).toBeHidden();
   await page.waitForTimeout(1_200);
   expect(workspaceRequests).toEqual([]);
+});
+
+test('reader resolves a NovelPing source and starts its catalog import', async ({ page }, testInfo) => {
+  const novelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: 'Resolution reader novel' });
+  await page.goto(`/?novel=${novelId}&chapter=1`);
+
+  const resolution = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/source-resolutions'));
+  await page.getByLabel('NovelPing chapter URL').fill(acceptedNovelPingUrl(testInfo, 1));
+  await page.getByRole('button', { name: 'Resolve', exact: true }).click();
+  expect((await resolution).status()).toBe(201);
+
+  await expect(page.getByLabel('NovelPing chapter URL')).toHaveValue('');
+  await expect(page.locator('#source-resolution-status')).toHaveText(`Source resolved: Fixture source ${testInfo.project.name === 'desktop-chromium' ? 101 : 201}, Chapter 2.`);
+  await expect(page.getByRole('button', { name: 'Import source chapters' })).toBeVisible();
+  await expect(page.locator('#source-resolution-status')).not.toContainText('https://');
+
+  const imported = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/catalog-import'));
+  await page.getByRole('button', { name: 'Import source chapters' }).click();
+  expect((await imported).status()).toBe(201);
+  await expect(page.locator('#source-import-job-status')).toContainText('Source import is');
+  await page.screenshot({ path: testInfo.outputPath('source-resolution.png'), fullPage: true });
+});
+
+test('reader keeps unresolved and retryable NovelPing checks concise and safe', async ({ page }) => {
+  const novelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: 'Safe resolution reader novel' });
+  await page.goto(`/?novel=${novelId}&chapter=1`);
+
+  await page.getByLabel('NovelPing chapter URL').fill(novelPingFixtureUrls.unresolved);
+  await page.getByRole('button', { name: 'Resolve' }).click();
+  await expect(page.locator('#source-resolution-status')).toHaveText('No verified source match was found.');
+  await expect(page.getByRole('button', { name: 'Import source chapters' })).toBeHidden();
+  await expect(page.locator('#source-resolution-status')).not.toContainText('unknown');
+
+  await page.getByLabel('NovelPing chapter URL').fill(novelPingFixtureUrls.retryable);
+  await page.getByRole('button', { name: 'Resolve' }).click();
+  await expect(page.locator('#source-resolution-status')).toHaveText('This source check is temporarily unavailable. You can try again.');
+  await expect(page.locator('#source-resolution-status')).toHaveAttribute('role', 'alert');
+  await expect(page.getByLabel('NovelPing chapter URL')).toHaveValue('');
+});
+
+for (const [name, errorMessage] of [
+  ['completion', undefined],
+  ['retryable error', 'Fixture source resolution request failed']
+]) {
+  test(`stale NovelPing resolution ${name} cannot update a newer workspace`, async ({ page }, testInfo) => {
+    const sourceNovelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: `Stale resolution ${name} source` });
+    const targetNovelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: `Stale resolution ${name} target` });
+    await installWorkspaceActionSettlementObserver(page);
+    await page.goto(`/?novel=${sourceNovelId}&chapter=1`);
+    const held = await holdWorkspaceAction(
+      page,
+      (request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/source-resolutions'),
+      { errorMessage }
+    );
+
+    await page.getByLabel('NovelPing chapter URL').fill(acceptedNovelPingUrl(testInfo, errorMessage ? 3 : 2));
+    await page.getByRole('button', { name: 'Resolve', exact: true }).click();
+    expect((await held.arrived).status).toBe(errorMessage ? 502 : 201);
+    await page.locator(`[data-novel-id="${targetNovelId}"]`).click();
+    await expect(page).toHaveURL(new RegExp(`\\?novel=${targetNovelId}&chapter=1$`));
+    await expect(page.getByLabel('NovelPing chapter URL')).toBeVisible();
+
+    try {
+      held.release();
+      await page.waitForFunction(() => window.__inktrailWorkspaceActionSettlements.includes('source-resolution-form'));
+      await expect(page.locator('#source-resolution-status')).toHaveText('');
+      await expect(page.getByRole('button', { name: 'Import source chapters' })).toBeHidden();
+      await expect(page.getByLabel('NovelPing chapter URL')).toBeEnabled();
+    } finally {
+      await held.dispose();
+    }
+  });
+}
+
+test('stale resolved-source import cannot update a newer workspace', async ({ page }) => {
+  const sourceNovelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: 'Stale resolved import source' });
+  const targetNovelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: 'Stale resolved import target' });
+  await installWorkspaceActionSettlementObserver(page);
+  const attemptId = 'fixture-resolution';
+  const collectionPath = `**/api/v1/novels/${sourceNovelId}/source-resolutions`;
+  const detailPath = `${collectionPath}/${attemptId}`;
+  const importPath = `${detailPath}/catalog-import`;
+  await page.route(collectionPath, async (route) => {
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [{ id: attemptId, state: 'resolved', acceptedSource: { catalogId: 'fixture-catalog' } }] }) });
+  });
+  await page.route(detailPath, async (route) => {
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ id: attemptId, state: 'resolved', selectedCandidateId: 'fixture-candidate', acceptedSource: { catalogId: 'fixture-catalog' }, evidence: { chapterNumber: 2 }, candidates: [{ id: 'fixture-candidate', metadata: { novelTitle: 'Fixture source' } }], importEligible: true }) });
+  });
+  let releaseImport;
+  const importReleased = new Promise((resolve) => { releaseImport = resolve; });
+  let resolveImportArrival;
+  const importArrived = new Promise((resolve) => { resolveImportArrival = resolve; });
+  await page.route(importPath, async (route) => {
+    resolveImportArrival();
+    await importReleased;
+    await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: 'fixture-job' }) });
+  });
+  await page.goto(`/?novel=${sourceNovelId}&chapter=1`);
+  await expect(page.getByRole('button', { name: 'Import source chapters' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Import source chapters' }).click();
+  await importArrived;
+  await page.locator(`[data-novel-id="${targetNovelId}"]`).click();
+  await expect(page).toHaveURL(new RegExp(`\\?novel=${targetNovelId}&chapter=1$`));
+
+  try {
+    releaseImport();
+    await page.waitForFunction(() => window.__inktrailWorkspaceActionSettlements.includes('import-resolved-source'));
+    await expect(page.locator('#source-resolution-status')).toHaveText('');
+    await expect(page.getByRole('button', { name: 'Import source chapters' })).toBeHidden();
+  } finally {
+    await page.unroute(collectionPath);
+    await page.unroute(detailPath);
+    await page.unroute(importPath);
+  }
+});
+
+test('stale source-resolution list refresh cannot update a newer workspace', async ({ page }) => {
+  const sourceNovelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: 'Stale resolution list source' });
+  const targetNovelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: 'Stale resolution list target' });
+  const held = await holdWorkspaceAction(
+    page,
+    (request) => request.method() === 'GET' && new URL(request.url()).pathname.endsWith('/source-resolutions')
+  );
+
+  await page.goto(`/?novel=${sourceNovelId}&chapter=1`);
+  expect((await held.arrived).status).toBe(200);
+  await page.locator(`[data-novel-id="${targetNovelId}"]`).click();
+  await expect(page).toHaveURL(new RegExp(`\\?novel=${targetNovelId}&chapter=1$`));
+
+  try {
+    held.release();
+    await expect(page.locator('#source-resolution-status')).toHaveText('');
+    await expect(page.getByRole('button', { name: 'Import source chapters' })).toBeHidden();
+  } finally {
+    await held.dispose();
+  }
 });
 
 test('workspace submits a huge chapter range without expanding it in the browser', async ({ page }, testInfo) => {
@@ -489,7 +639,9 @@ test('workspace discovers and controls a source catalog without interrupting rea
   await page.getByRole('button', { name: 'Next chapter' }).last().click();
   await expect(page.getByRole('heading', { name: 'Navigation remains available' })).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`\\?novel=${novelBody.id}&chapter=11$`));
-  await expect(page.locator('#translation-workspace')).toBeHidden();
+  await expect(page.locator('#translation-workspace')).toBeVisible();
+  await expect(page.getByLabel('NovelPing chapter URL')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Queue translation' })).toBeHidden();
 });
 
 for (const [name, sourceBookPrefix, errorMessage] of [

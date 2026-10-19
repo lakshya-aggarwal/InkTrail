@@ -37,12 +37,18 @@ const importSourceCatalog = document.querySelector('#import-source-catalog');
 const sourceImportJob = document.querySelector('#source-import-job');
 const sourceImportJobStatus = document.querySelector('#source-import-job-status');
 const sourceImportJobControl = document.querySelector('#source-import-job-control');
+const sourceResolutionForm = document.querySelector('#source-resolution-form');
+const novelPingChapterUrl = document.querySelector('#novelping-chapter-url');
+const resolveSource = document.querySelector('#resolve-source');
+const sourceResolutionStatus = document.querySelector('#source-resolution-status');
+const importResolvedSource = document.querySelector('#import-resolved-source');
 
 let novels = [];
 let currentChapter = null;
 let workspacePoll = null;
 let workspaceToken = 0;
 let workspaceCatalogProgress = null;
+let workspaceResolution = null;
 
 const activeStates = new Set(['queued', 'running', 'retrying']);
 
@@ -59,7 +65,9 @@ async function request(path, options) {
   const response = await fetch(path, options);
   if (response.ok) return response.json();
   const body = await response.json().catch(() => null);
-  throw new Error(body?.error?.message || 'The library could not be updated.');
+  const error = new Error(body?.error?.message || 'The library could not be updated.');
+  error.retryable = body?.error?.retryable === true;
+  throw error;
 }
 
 function stopWorkspacePolling() {
@@ -77,6 +85,18 @@ function clearWorkspaceStatus() {
   workspaceStatus.textContent = '';
 }
 
+function setSourceResolutionStatus(message, { error = false } = {}) {
+  sourceResolutionStatus.setAttribute('role', error ? 'alert' : 'status');
+  sourceResolutionStatus.textContent = message;
+}
+
+function clearSourceResolution() {
+  workspaceResolution = null;
+  importResolvedSource.hidden = true;
+  importResolvedSource.disabled = false;
+  setSourceResolutionStatus('');
+}
+
 function hideWorkspace() {
   workspaceToken += 1;
   stopWorkspacePolling();
@@ -87,6 +107,7 @@ function hideWorkspace() {
   sourceCatalog.hidden = true;
   sourceImportJob.hidden = true;
   workspaceCatalogProgress = null;
+  clearSourceResolution();
   clearWorkspaceStatus();
 }
 
@@ -100,7 +121,7 @@ function rangeSelection() {
 }
 
 function workspaceStillSelected(novelId, token) {
-  return workspaceToken === token && currentChapter?.novelId === novelId && currentChapter.hasSourceProvenance;
+  return workspaceToken === token && currentChapter?.novelId === novelId;
 }
 
 function renderWorkspaceJob(job) {
@@ -138,6 +159,8 @@ function renderSourceCatalog(catalog, detail, job) {
   sourceCatalog.hidden = false;
   sourceCatalogStatus.textContent = `Kujiang catalog ready: ${catalog.entryCount} source chapters, ${catalog.importedEntryCount} imported.`;
   const complete = catalog.importedEntryCount >= catalog.entryCount;
+  const importedFromResolution = workspaceResolution?.catalogId === catalog.id;
+  importSourceCatalog.hidden = importedFromResolution;
   importSourceCatalog.disabled = complete;
   importSourceCatalog.textContent = complete ? 'Source chapters imported' : 'Import source chapters';
   if (!job) {
@@ -155,6 +178,48 @@ function renderSourceCatalog(catalog, detail, job) {
   if (controllable) sourceImportJobControl.textContent = job.state === 'paused' ? 'Resume source import' : 'Pause source import';
   sourceImportJobControl.dataset.jobId = job.id;
   sourceImportJobControl.dataset.action = job.state === 'paused' ? 'resume' : 'pause';
+}
+
+function currentSourceResolution(items) {
+  return items.find((item) => item.state === 'resolved' && item.acceptedSource) ?? items[0] ?? null;
+}
+
+function renderSourceResolution(detail) {
+  workspaceResolution = null;
+  importResolvedSource.hidden = true;
+  if (!detail) {
+    setSourceResolutionStatus('');
+    return;
+  }
+  if (detail.state === 'resolved' && detail.importEligible && detail.acceptedSource) {
+    const candidate = detail.candidates.find((item) => item.id === detail.selectedCandidateId);
+    const sourceTitle = candidate?.metadata?.novelTitle ?? 'source catalog';
+    setSourceResolutionStatus(`Source resolved: ${sourceTitle}, Chapter ${detail.evidence.chapterNumber}.`);
+    workspaceResolution = { id: detail.id, catalogId: detail.acceptedSource.catalogId };
+    importResolvedSource.hidden = false;
+    return;
+  }
+  if (detail.state === 'unresolved') {
+    setSourceResolutionStatus('No verified source match was found.');
+    return;
+  }
+  setSourceResolutionStatus('This source check is temporarily unavailable. You can try again.', { error: true });
+}
+
+async function refreshSourceResolution(novelId, token = workspaceToken) {
+  try {
+    const { items } = await request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-resolutions`);
+    const resolution = currentSourceResolution(items);
+    const detail = resolution ? await request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-resolutions/${encodeURIComponent(resolution.id)}`) : null;
+    if (!workspaceStillSelected(novelId, token)) return;
+    renderSourceResolution(detail);
+  } catch (error) {
+    if (workspaceStillSelected(novelId, token)) {
+      workspaceResolution = null;
+      importResolvedSource.hidden = true;
+      setSourceResolutionStatus('This source check is temporarily unavailable. You can try again.', { error: true });
+    }
+  }
 }
 
 async function refreshCurrentChapterNavigation(novelId, token) {
@@ -175,12 +240,15 @@ function scheduleWorkspaceRefresh(novelId, token) {
 }
 
 async function refreshWorkspace(novelId, token = workspaceToken) {
+  const resolutionRefresh = refreshSourceResolution(novelId, token);
   try {
     const [jobs, exports, catalogs] = await Promise.all([
       request(`/api/v1/jobs?novelId=${encodeURIComponent(novelId)}`),
       request(`/api/v1/novels/${encodeURIComponent(novelId)}/exports`),
       request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-catalogs`)
     ]);
+    if (!workspaceStillSelected(novelId, token)) return;
+    await resolutionRefresh;
     if (!workspaceStillSelected(novelId, token)) return;
     const translationJobs = jobs.items.filter((job) => job.type === 'translate_chapters');
     const sourceImportJobs = jobs.items.filter((job) => job.type === 'source_import_catalog');
@@ -209,14 +277,12 @@ async function refreshWorkspace(novelId, token = workspaceToken) {
 }
 
 function showWorkspace(chapter) {
-  if (!chapter.hasSourceProvenance) {
-    hideWorkspace();
-    return;
-  }
   workspaceToken += 1;
   const token = workspaceToken;
   stopWorkspacePolling();
   workspace.hidden = false;
+  workspaceForm.hidden = !chapter.hasSourceProvenance;
+  sourceCatalogForm.hidden = !chapter.hasSourceProvenance;
   workspaceFrom.value = String(chapter.chapterNumber);
   workspaceTo.value = String(chapter.chapterNumber);
   workspaceJob.hidden = true;
@@ -224,12 +290,16 @@ function showWorkspace(chapter) {
   workspaceExportDownload.hidden = true;
   sourceCatalog.hidden = true;
   sourceImportJob.hidden = true;
+  importSourceCatalog.hidden = false;
   discoverSourceCatalog.disabled = false;
   importSourceCatalog.disabled = false;
   sourceImportJobControl.disabled = false;
+  resolveSource.disabled = false;
   workspaceCatalogProgress = null;
+  clearSourceResolution();
   clearWorkspaceStatus();
-  void refreshWorkspace(chapter.novelId, token);
+  if (chapter.hasSourceProvenance) void refreshWorkspace(chapter.novelId, token);
+  else void refreshSourceResolution(chapter.novelId, token);
 }
 
 function setNavigationAvailability(chapter) {
@@ -459,6 +529,58 @@ sourceCatalogForm.addEventListener('submit', async (event) => {
     if (workspaceStillSelected(novelId, token)) setWorkspaceStatus(error.message, { error: true });
   } finally {
     if (workspaceStillSelected(novelId, token)) discoverSourceCatalog.disabled = false;
+  }
+});
+sourceResolutionForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!currentChapter || !novelPingChapterUrl.value.trim()) return;
+  const novelId = currentChapter.novelId;
+  const token = workspaceToken;
+  const novelPingUrl = novelPingChapterUrl.value.trim();
+  sourceResolutionForm.reset();
+  try {
+    resolveSource.disabled = true;
+    setSourceResolutionStatus('Checking this chapter against a trusted source.');
+    const detail = await request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-resolutions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': `reader-resolution-${crypto.randomUUID()}` },
+      body: JSON.stringify({ novelPingUrl })
+    });
+    if (!workspaceStillSelected(novelId, token)) return;
+    renderSourceResolution(detail);
+    await refreshWorkspace(novelId, token);
+  } catch (error) {
+    if (workspaceStillSelected(novelId, token)) {
+      const message = error.retryable
+        ? 'This source check is temporarily unavailable. You can try again.'
+        : 'This chapter URL cannot be used for source matching.';
+      setSourceResolutionStatus(message, { error: true });
+    }
+  } finally {
+    if (workspaceStillSelected(novelId, token)) resolveSource.disabled = false;
+  }
+});
+importResolvedSource.addEventListener('click', async () => {
+  if (!currentChapter || !workspaceResolution) return;
+  const novelId = currentChapter.novelId;
+  const token = workspaceToken;
+  const attemptId = workspaceResolution.id;
+  try {
+    importResolvedSource.disabled = true;
+    setSourceResolutionStatus('Starting source import.');
+    await request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-resolutions/${encodeURIComponent(attemptId)}/catalog-import`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': `reader-source-import-${crypto.randomUUID()}` }
+    });
+    if (!workspaceStillSelected(novelId, token)) return;
+    setSourceResolutionStatus('Source import started.');
+    await refreshWorkspace(novelId, token);
+  } catch (error) {
+    if (workspaceStillSelected(novelId, token)) {
+      setSourceResolutionStatus(error.retryable ? 'This source import is temporarily unavailable. You can try again.' : 'This source is no longer ready to import.', { error: true });
+    }
+  } finally {
+    if (workspaceStillSelected(novelId, token)) importResolvedSource.disabled = false;
   }
 });
 importSourceCatalog.addEventListener('click', async () => {
