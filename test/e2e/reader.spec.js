@@ -399,6 +399,7 @@ test('reader resolves a NovelPing source and starts its catalog import', async (
   await page.getByRole('button', { name: 'Import source chapters' }).click();
   expect((await imported).status()).toBe(201);
   await expect(page.locator('#source-import-job-status')).toContainText('Source import is');
+  await expect(page.locator('#import-resolved-source')).toBeHidden();
   await page.screenshot({ path: testInfo.outputPath('source-resolution.png'), fullPage: true });
 });
 
@@ -407,13 +408,13 @@ test('reader keeps unresolved and retryable NovelPing checks concise and safe', 
   await page.goto(`/?novel=${novelId}&chapter=1`);
 
   await page.getByLabel('NovelPing chapter URL').fill(novelPingFixtureUrls.unresolved);
-  await page.getByRole('button', { name: 'Resolve' }).click();
+  await page.getByRole('button', { name: 'Resolve', exact: true }).click();
   await expect(page.locator('#source-resolution-status')).toHaveText('No verified source match was found.');
   await expect(page.getByRole('button', { name: 'Import source chapters' })).toBeHidden();
   await expect(page.locator('#source-resolution-status')).not.toContainText('unknown');
 
   await page.getByLabel('NovelPing chapter URL').fill(novelPingFixtureUrls.retryable);
-  await page.getByRole('button', { name: 'Resolve' }).click();
+  await page.getByRole('button', { name: 'Resolve', exact: true }).click();
   await expect(page.locator('#source-resolution-status')).toHaveText('This source check is temporarily unavailable. You can try again.');
   await expect(page.locator('#source-resolution-status')).toHaveAttribute('role', 'alert');
   await expect(page.getByLabel('NovelPing chapter URL')).toHaveValue('');

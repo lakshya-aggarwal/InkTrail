@@ -161,6 +161,7 @@ function renderSourceCatalog(catalog, detail, job) {
   const complete = catalog.importedEntryCount >= catalog.entryCount;
   const importedFromResolution = workspaceResolution?.catalogId === catalog.id;
   importSourceCatalog.hidden = importedFromResolution;
+  if (importedFromResolution && job) importResolvedSource.hidden = true;
   importSourceCatalog.disabled = complete;
   importSourceCatalog.textContent = complete ? 'Source chapters imported' : 'Import source chapters';
   if (!job) {
