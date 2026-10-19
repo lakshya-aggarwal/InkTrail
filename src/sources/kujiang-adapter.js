@@ -164,7 +164,7 @@ function requireNormalizedEvidence(evidence) {
   return evidence;
 }
 
-function candidateIdentity(identity) {
+export function normalizeKujiangCandidateIdentity(identity) {
   if (identity === null || typeof identity !== 'object' || Array.isArray(identity)) {
     throw new ValidationError('Kujiang candidate identity must be an object');
   }
@@ -563,7 +563,7 @@ export function createKujiangAdapter({
   if (!Array.isArray(candidateIdentities) || candidateIdentities.length > maxCatalogCandidates) {
     throw new ValidationError('candidateIdentities must be a bounded array');
   }
-  const configuredCandidates = candidateIdentities.map(candidateIdentity);
+  const configuredCandidates = candidateIdentities.map(normalizeKujiangCandidateIdentity);
   if (new Set(configuredCandidates.map(({ canonicalBookUrl }) => canonicalBookUrl)).size !== configuredCandidates.length) {
     throw new ValidationError('candidateIdentities must not contain duplicate book URLs');
   }

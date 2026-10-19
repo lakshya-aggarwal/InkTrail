@@ -27,6 +27,18 @@ async function seedNovelWithChapters(request, { chapterNumbers, title = 'Seeded 
   return novelBody.id;
 }
 
+async function seedResolutionIdentity(request, novelId, sourceId) {
+  const created = await request.post(`/api/v1/novels/${novelId}/source-identities`, {
+    data: {
+      bookUrl: `https://www.kujiang.com/book/8${sourceId}`,
+      novelTitle: `Fixture source ${sourceId}`,
+      novelTitleAliases: [`fixture source ${sourceId}`],
+      chapterTitleAliases: { '101': ['lamp fire'] }
+    }
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+}
+
 async function seedTranslatedSourceChapter(request, { title = 'Translated novel', sourceUrl } = {}) {
   const novel = await request.post('/api/v1/novels', { data: { title } });
   const novelBody = await novel.json();
@@ -383,6 +395,8 @@ test('local chapters keep source resolution available and stop source-work polli
 
 test('reader resolves a NovelPing source and starts its catalog import', async ({ page }, testInfo) => {
   const novelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: 'Resolution reader novel' });
+  const sourceId = testInfo.project.name === 'desktop-chromium' ? 101 : 201;
+  await seedResolutionIdentity(page.request, novelId, sourceId);
   await page.goto(`/?novel=${novelId}&chapter=1`);
 
   const resolution = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/source-resolutions'));

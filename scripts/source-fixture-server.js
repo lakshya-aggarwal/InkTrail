@@ -11,7 +11,6 @@ const catalogUrl = 'https://www.kujiang.com/book/9/catalog';
 const novelPingUrl = 'https://novelping.com/book/return-of-the-war-god/chapter-2-lamp-fire';
 const unresolvedNovelPingUrl = 'https://novelping.com/book/unknown/chapter-2-lamp-fire';
 const retryNovelPingUrl = 'https://novelping.com/book/return-of-the-war-god/chapter-2-retry';
-const fixtureResolutionIds = [101, 201];
 const fixturePath = new URL('../test/fixtures/kujiang/chapter.html', import.meta.url);
 const catalogFixturePath = new URL('../test/fixtures/kujiang/catalog.html', import.meta.url);
 const novelPingFixturePath = new URL('../test/fixtures/novelping/chapter-2.html', import.meta.url);
@@ -102,19 +101,6 @@ const app = await createApp({
   databasePath: join(mkdtempSync(join(tmpdir(), 'inktrail-source-fixture-')), 'inktrail.sqlite'),
   fetch: fixtureFetch,
   translationProvider: fixtureTranslationProvider,
-  resolverCandidateIdentities: [{
-    bookUrl: 'https://www.kujiang.com/book/9',
-    novelTitle: '战神狂飙',
-    novelTitleAliases: ['return of the war god'],
-    author: '天蚕土豆',
-    authorAliases: ['tian can tu dou'],
-    chapterTitleAliases: { '101': ['lamp fire'] }
-  }, ...fixtureResolutionIds.map((id) => ({
-    bookUrl: `https://www.kujiang.com/book/8${id}`,
-    novelTitle: `Fixture source ${id}`,
-    novelTitleAliases: [`fixture source ${id}`],
-    chapterTitleAliases: { '101': ['lamp fire'] }
-  }))],
   runnerOptions: { retryDelayMs: 5 }
 });
 const port = Number(process.env.PORT ?? 4278);

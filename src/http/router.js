@@ -106,6 +106,28 @@ function sourceResolutionInput(input) {
   return input;
 }
 
+function sourceIdentityInput(input) {
+  const allowed = new Set(['bookUrl', 'novelTitle', 'novelTitleAliases', 'author', 'authorAliases', 'chapterTitleAliases']);
+  if (!Object.hasOwn(input, 'bookUrl') || !Object.hasOwn(input, 'novelTitle') || Object.keys(input).some((key) => !allowed.has(key))) {
+    throw new ValidationError('input must contain bookUrl and novelTitle with no unsupported fields');
+  }
+  return input;
+}
+
+function sourceIdentityResource(identity) {
+  return {
+    id: identity.id,
+    site: identity.site,
+    canonicalBookUrl: identity.canonicalBookUrl,
+    novelTitle: identity.novelTitle,
+    novelTitleAliases: identity.novelTitleAliases,
+    author: identity.author,
+    authorAliases: identity.authorAliases,
+    chapterTitleAliases: identity.chapterTitleAliases,
+    createdAt: identity.createdAt
+  };
+}
+
 function sourceImportCatalogJobInput(input) {
   if (Object.keys(input).length !== 3 || !['novelId', 'type', 'target'].every((key) => Object.hasOwn(input, key))) {
     throw new ValidationError('input must contain only novelId, type, and target');
@@ -338,6 +360,42 @@ export function createRouter({ libraryService, translationService, feedbackVerif
         const snapshot = repositories.catalogs.getSnapshot(novelId, catalogId);
         const summary = repositories.catalogs.listSnapshotsWithProgress(novelId).find((catalog) => catalog.id === catalogId);
         writeJson(response, 200, sourceCatalogDetail(snapshot, summary));
+      });
+      return;
+    }
+
+    const sourceIdentityCollectionMatch = /^\/api\/v1\/novels\/([^/]+)\/source-identities$/.exec(pathname);
+    if (sourceIdentityCollectionMatch) {
+      const novelId = decodePathParameter(response, sourceIdentityCollectionMatch[1]);
+      if (novelId === undefined) return;
+      if (method === 'GET') {
+        await handle(response, novelId, async () => writeJson(response, 200, {
+          items: repositories.sourceIdentities.list(novelId).map(sourceIdentityResource)
+        }));
+        return;
+      }
+      if (method === 'POST') {
+        await handle(response, novelId, async () => {
+          const identity = repositories.sourceIdentities.create({
+            novelId,
+            ...sourceIdentityInput(await readObject(request))
+          });
+          writeJson(response, 201, sourceIdentityResource(identity));
+        });
+        return;
+      }
+    }
+
+    const sourceIdentityMatch = /^\/api\/v1\/novels\/([^/]+)\/source-identities\/([^/]+)$/.exec(pathname);
+    if (method === 'DELETE' && sourceIdentityMatch) {
+      const novelId = decodePathParameter(response, sourceIdentityMatch[1]);
+      if (novelId === undefined) return;
+      const identityId = decodePathParameter(response, sourceIdentityMatch[2]);
+      if (identityId === undefined) return;
+      await handle(response, identityId, async () => {
+        repositories.sourceIdentities.remove({ novelId, identityId });
+        response.writeHead(204);
+        response.end();
       });
       return;
     }

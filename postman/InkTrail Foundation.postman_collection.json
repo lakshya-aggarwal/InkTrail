@@ -11,6 +11,7 @@
     { "key": "feedbackId", "value": "", "description": "Set by Submit translation feedback." },
     { "key": "jobId", "value": "", "description": "Set by Create translation job." },
     { "key": "catalogId", "value": "", "description": "Set by Discover source catalog." },
+    { "key": "sourceIdentityId", "value": "", "description": "Set by Create vetted source identity." },
     { "key": "sourceResolutionAttemptId", "value": "", "description": "Set by Resolve NovelPing source." },
     { "key": "exportId", "value": "", "description": "Set by Create EPUB export." },
     { "key": "missingNovelId", "value": "missing" },
@@ -83,6 +84,33 @@
       "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-catalogs/{{catalogId}}" }
     },
     {
+      "name": "Create vetted source identity",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"bookUrl\": \"{{fixtureSourceBookUrl}}\",\n  \"novelTitle\": \"战神狂飙\",\n  \"novelTitleAliases\": [\"return of the war god\"],\n  \"chapterTitleAliases\": {\n    \"101\": [\"lamp fire\"]\n  }\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-identities"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('creates a vetted source identity', () => pm.response.to.have.status(201));", "pm.test('returns a canonical Kujiang identity', () => pm.expect(pm.response.json().canonicalBookUrl).to.eql(pm.collectionVariables.get('fixtureSourceBookUrl')));", "pm.collectionVariables.set('sourceIdentityId', pm.response.json().id);"]
+        }
+      }]
+    },
+    {
+      "name": "List vetted source identities",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-identities" },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('lists the vetted source identity', () => pm.expect(pm.response.json().items.map((identity) => identity.id)).to.include(pm.collectionVariables.get('sourceIdentityId')));"]
+        }
+      }]
+    },
+    {
       "name": "Resolve NovelPing source",
       "request": {
         "method": "POST",
@@ -114,6 +142,17 @@
         "script": {
           "type": "text/javascript",
           "exec": ["pm.test('queues or returns a durable source import job', () => pm.expect([200, 201]).to.include(pm.response.code));", "pm.collectionVariables.set('jobId', pm.response.json().id);"]
+        }
+      }]
+    },
+    {
+      "name": "Delete vetted source identity",
+      "request": { "method": "DELETE", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-identities/{{sourceIdentityId}}" },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('removes the vetted source identity', () => pm.response.to.have.status(204));"]
         }
       }]
     },

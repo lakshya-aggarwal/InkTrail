@@ -52,17 +52,20 @@ async function requestJson(method, path, body, headers = {}) {
   return { status: response.status, body: await response.json() };
 }
 
+async function createIdentity(novelId) {
+  return requestJson('POST', `/api/v1/novels/${novelId}/source-identities`, {
+    bookUrl,
+    novelTitle: '战神狂飙',
+    novelTitleAliases: ['return of the war god'],
+    chapterTitleAliases: { '101': ['lamp fire'] }
+  });
+}
+
 beforeEach(async () => {
   failCatalog = false;
   app = await startTestApp({
     fetch: fixtureFetch,
-    novelPingExtractor,
-    resolverCandidateIdentities: [{
-      bookUrl,
-      novelTitle: '战神狂飙',
-      novelTitleAliases: ['return of the war god'],
-      chapterTitleAliases: { '101': ['lamp fire'] }
-    }]
+    novelPingExtractor
   });
 });
 
@@ -72,6 +75,7 @@ afterEach(async () => {
 
 test('source resolution resources persist a safe accepted result, replay it, and explicitly create the existing import job', async () => {
   const novel = await requestJson('POST', '/api/v1/novels', { title: 'Resolver Trail' });
+  const identity = await createIdentity(novel.body.id);
   const created = await requestJson('POST', `/api/v1/novels/${novel.body.id}/source-resolutions`, { novelPingUrl: chapterUrl }, { 'Idempotency-Key': 'resolution-1' });
   const replay = await requestJson('POST', `/api/v1/novels/${novel.body.id}/source-resolutions`, { novelPingUrl: chapterUrl }, { 'Idempotency-Key': 'resolution-1' });
   const listed = await requestJson('GET', `/api/v1/novels/${novel.body.id}/source-resolutions`);
@@ -81,6 +85,7 @@ test('source resolution resources persist a safe accepted result, replay it, and
   const importReplay = await requestJson('POST', `/api/v1/novels/${novel.body.id}/source-resolutions/${created.body.id}/catalog-import`, undefined, { 'Idempotency-Key': 'resolution-import-1' });
 
   assert.equal(created.status, 201);
+  assert.equal(identity.status, 201);
   assert.equal(created.body.state, 'resolved');
   assert.equal(created.body.importEligible, true);
   assert.equal(created.body.evidence.chapterNumber, 2);
@@ -102,6 +107,7 @@ test('source resolution resources persist a safe accepted result, replay it, and
 test('source resolution routes reject malformed, unresolved, failed, and foreign requests without exposing upstream text', async () => {
   const novel = await requestJson('POST', '/api/v1/novels', { title: 'Resolver Errors' });
   const other = await requestJson('POST', '/api/v1/novels', { title: 'Other Resolver' });
+  await createIdentity(novel.body.id);
   const invalid = await requestJson('POST', `/api/v1/novels/${novel.body.id}/source-resolutions`, {});
   const extra = await requestJson('POST', `/api/v1/novels/${novel.body.id}/source-resolutions`, { novelPingUrl: chapterUrl, extra: true });
   const invalidKey = await requestJson('POST', `/api/v1/novels/${novel.body.id}/source-resolutions`, { novelPingUrl: chapterUrl }, { 'Idempotency-Key': ' ' });

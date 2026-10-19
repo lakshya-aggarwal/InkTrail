@@ -26,6 +26,7 @@ test('migration creates library and source provenance tables', () => {
     'schema_migrations',
     'source_catalog_entries',
     'source_catalogs',
+    'source_identities',
     'source_resolution_attempts',
     'source_resolution_candidates',
     'translation_quality_findings',
@@ -50,7 +51,7 @@ test('migrations are recorded once and source foreign keys are enforced', () => 
   migrate(database);
   migrate(database);
 
-  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 12);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 13);
   assert.throws(() => database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'missing-novel', 1, 'One', '2026-10-11T00:00:00.000Z'));
   assert.throws(() => database.prepare(`
     insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
@@ -60,6 +61,25 @@ test('migrations are recorded once and source foreign keys are enforced', () => 
     insert into chapter_sources (id, novel_id, chapter_id, novel_source_id, site, external_chapter_id, source_url, normalized_url, source_title, fetched_at, content_sha256, created_at)
     values ('chapter-source-a', 'missing-novel', 'missing-chapter', 'missing-source', 'kujiang', '906595', 'https://www.kujiang.com/book/9/906595', 'https://www.kujiang.com/book/9/906595', 'One', '2026-10-12T00:00:00.000Z', 'hash-a', '2026-10-12T00:00:00.000Z')
   `).run());
+});
+
+test('source identity storage rejects malformed JSON and a fifth identity at the database boundary', () => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  migrate(database);
+  const now = '2026-10-20T00:00:00.000Z';
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
+  const insert = database.prepare(`
+    insert into source_identities (
+      id, novel_id, site, canonical_book_url, novel_title, novel_title_aliases_json,
+      author, author_aliases_json, chapter_title_aliases_json, created_at
+    ) values (?, 'novel-a', 'kujiang', ?, '源小说', ?, null, '[]', '{}', ?)
+  `);
+
+  assert.throws(() => insert.run('bad-json', 'https://www.kujiang.com/book/9', '{', now));
+  for (const bookId of [9, 10, 11, 12]) {
+    insert.run(`identity-${bookId}`, `https://www.kujiang.com/book/${bookId}`, '[]', now);
+  }
+  assert.throws(() => insert.run('identity-13', 'https://www.kujiang.com/book/13', '[]', now), /source identity limit reached/);
 });
 
 test('additive migration preserves existing translation revisions', (t) => {

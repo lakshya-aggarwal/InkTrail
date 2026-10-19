@@ -64,11 +64,16 @@ function sourceIdentityConflict(repositories, novelId, candidate) {
   return accepted.length > 0 && (!existingSource || accepted.some((resolution) => resolution.novelSourceId !== existingSource.id));
 }
 
-export function createSourceResolutionService({ database, repositories, novelPingExtractor, catalogAdapters }) {
+export function createSourceResolutionService({ database, repositories, novelPingExtractor, catalogAdapters = null, catalogAdapterFactory = null }) {
   if (!database || typeof database.exec !== 'function') throw new ValidationError('database is required');
   if (!novelPingExtractor || typeof novelPingExtractor.fetchEvidence !== 'function') throw new ValidationError('novelPingExtractor is required');
-  if (!Array.isArray(catalogAdapters) || catalogAdapters.some((adapter) => typeof adapter?.discoverCatalogCandidates !== 'function')) {
+  if (catalogAdapters !== null && (!Array.isArray(catalogAdapters) || catalogAdapters.some((adapter) => typeof adapter?.discoverCatalogCandidates !== 'function'))) {
     throw new ValidationError('catalogAdapters must provide candidate discovery');
+  }
+  if (catalogAdapterFactory !== null && typeof catalogAdapterFactory !== 'function') throw new ValidationError('catalogAdapterFactory must be a function');
+  if (catalogAdapters === null && catalogAdapterFactory === null) throw new ValidationError('catalog candidate discovery is required');
+  if (catalogAdapterFactory !== null && typeof repositories.sourceIdentities?.listCandidateIdentities !== 'function') {
+    throw new ValidationError('source identity repository is required');
   }
 
   function persistTerminal(input) {
@@ -101,7 +106,10 @@ export function createSourceResolutionService({ database, repositories, novelPin
       const resolution = Promise.resolve().then(async () => {
         let candidates;
         try {
-          candidates = (await Promise.all(catalogAdapters.map((adapter) => adapter.discoverCatalogCandidates(evidence, evidence.chapterNumber)))).flat();
+          const adapters = catalogAdapterFactory === null
+            ? catalogAdapters
+            : [catalogAdapterFactory(repositories.sourceIdentities.listCandidateIdentities(novelId))];
+          candidates = (await Promise.all(adapters.map((adapter) => adapter.discoverCatalogCandidates(evidence, evidence.chapterNumber)))).flat();
         } catch (error) {
           return persistTerminal({
             novelId,

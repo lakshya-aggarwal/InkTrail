@@ -17,9 +17,9 @@ const fixtureTranslationProvider = {
   }
 };
 
-export async function startTestApp({ databasePath = ':memory:', fetch: sourceFetch, translationProvider = fixtureTranslationProvider, writeEpubArchive, resolverCandidateIdentities, novelPingExtractor } = {}) {
+export async function startTestApp({ databasePath = ':memory:', fetch: sourceFetch, translationProvider = fixtureTranslationProvider, writeEpubArchive, novelPingExtractor } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'inktrail-http-'));
-  const app = await createApp({ databasePath, exportRoot: join(directory, 'exports'), fetch: sourceFetch, translationProvider, writeEpubArchive, resolverCandidateIdentities, novelPingExtractor });
+  const app = await createApp({ databasePath, exportRoot: join(directory, 'exports'), fetch: sourceFetch, translationProvider, writeEpubArchive, novelPingExtractor });
   app.server.listen(0, '127.0.0.1');
   await once(app.server, 'listening');
   const { port } = app.server.address();

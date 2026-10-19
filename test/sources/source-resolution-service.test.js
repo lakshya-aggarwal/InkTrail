@@ -5,6 +5,7 @@ import { openDatabase } from '../../src/db/database.js';
 import { migrate } from '../../src/db/migrate.js';
 import { createNovelRepository } from '../../src/novels/novel-repository.js';
 import { createSourceCatalogRepository } from '../../src/sources/source-catalog-repository.js';
+import { createSourceIdentityRepository } from '../../src/sources/source-identity-repository.js';
 import { createSourceRepository } from '../../src/sources/source-repository.js';
 import { createSourceResolutionRepository } from '../../src/sources/source-resolution-repository.js';
 import { createSourceResolutionService } from '../../src/sources/source-resolution-service.js';
@@ -30,7 +31,8 @@ function createRepositories() {
     novels: createNovelRepository(database, clock),
     sources: createSourceRepository(database, clock),
     catalogs: createSourceCatalogRepository(database, clock),
-    resolutions: createSourceResolutionRepository(database, clock)
+    resolutions: createSourceResolutionRepository(database, clock),
+    sourceIdentities: createSourceIdentityRepository(database, clock)
   };
 }
 
@@ -113,6 +115,41 @@ test('persists an unresolved decision without creating a source or catalog', asy
   assert.equal(result.attempt.errorCode, 'resolution_unverified');
   assert.equal(count(repositories.database, 'novel_sources'), 0);
   assert.equal(count(repositories.database, 'source_catalogs'), 0);
+});
+
+test('uses only the requested novel durable candidate identities for discovery', async (t) => {
+  const repositories = createRepositories();
+  t.after(() => repositories.database.close());
+  const novel = repositories.novels.createNovel({ title: 'Reader novel' });
+  const other = repositories.novels.createNovel({ title: 'Other novel' });
+  repositories.sourceIdentities.create({
+    novelId: novel.id,
+    bookUrl: 'https://www.kujiang.com/book/9',
+    novelTitle: '战神狂飙',
+    novelTitleAliases: ['return of the war god'],
+    chapterTitleAliases: { '101': ['lamp fire'] }
+  });
+  repositories.sourceIdentities.create({
+    novelId: other.id,
+    bookUrl: 'https://www.kujiang.com/book/10',
+    novelTitle: 'Other source',
+    novelTitleAliases: ['other source'],
+    chapterTitleAliases: { '101': ['lamp fire'] }
+  });
+  let configured = null;
+  const service = createSourceResolutionService({
+    database: repositories.database,
+    repositories,
+    novelPingExtractor: { async fetchEvidence() { return evidence; } },
+    catalogAdapterFactory(identities) {
+      configured = identities;
+      return { async discoverCatalogCandidates() { return []; } };
+    }
+  });
+
+  await service.resolveNovelPingChapter({ novelId: novel.id, novelPingUrl: chapterUrl });
+
+  assert.deepEqual(configured.map(({ bookUrl }) => bookUrl), ['https://www.kujiang.com/book/9']);
 });
 
 test('replays terminal evidence without a duplicate candidate-provider call', async (t) => {

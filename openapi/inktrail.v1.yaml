@@ -235,6 +235,68 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '404':
           $ref: '#/components/responses/NotFound'
+  /api/v1/novels/{novelId}/source-identities:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+    get:
+      operationId: listSourceIdentities
+      summary: List up to four vetted Kujiang source identities for a novel
+      responses:
+        '200':
+          description: Source identities in creation order
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    maxItems: 4
+                    items:
+                      $ref: '#/components/schemas/SourceIdentity'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: createSourceIdentity
+      summary: Add one vetted Kujiang source identity for a novel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceIdentityInput'
+      responses:
+        '201':
+          description: Vetted source identity created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceIdentity'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+  /api/v1/novels/{novelId}/source-identities/{identityId}:
+    parameters:
+      - $ref: '#/components/parameters/NovelId'
+      - $ref: '#/components/parameters/SourceIdentityId'
+    delete:
+      operationId: deleteSourceIdentity
+      summary: Remove one vetted source identity before resolution
+      responses:
+        '204':
+          description: Vetted source identity removed
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/v1/novels/{novelId}/source-resolutions:
     parameters:
       - $ref: '#/components/parameters/NovelId'
@@ -772,6 +834,13 @@ components:
       schema:
         type: string
         format: uuid
+    SourceIdentityId:
+      name: identityId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     SourceResolutionAttemptId:
       name: attemptId
       in: path
@@ -945,6 +1014,84 @@ components:
           maxItems: 5000
           items:
             $ref: '#/components/schemas/SourceCatalogEntry'
+    SourceIdentityInput:
+      type: object
+      additionalProperties: false
+      required: [bookUrl, novelTitle]
+      properties:
+        bookUrl:
+          type: string
+          format: uri
+          description: Canonical HTTPS Kujiang book URL using the exact `/book/<positive-book-id>` path without a query string or fragment.
+          pattern: '^https://www\.kujiang\.com/book/[1-9][0-9]*$'
+          example: https://www.kujiang.com/book/9
+        novelTitle:
+          type: string
+          minLength: 1
+          description: Primary source-novel title, normally the Chinese title published by Kujiang.
+        novelTitleAliases:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        author:
+          type: string
+          minLength: 1
+          nullable: true
+        authorAliases:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        chapterTitleAliases:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+              minLength: 1
+          description: Map from a positive Kujiang external chapter ID to declared title aliases. Keys must be positive decimal IDs.
+    SourceIdentity:
+      type: object
+      required: [id, site, canonicalBookUrl, novelTitle, novelTitleAliases, author, authorAliases, chapterTitleAliases, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        site:
+          type: string
+          enum: [kujiang]
+        canonicalBookUrl:
+          type: string
+          format: uri
+          pattern: '^https://www\.kujiang\.com/book/[1-9][0-9]*$'
+        novelTitle:
+          type: string
+          minLength: 1
+        novelTitleAliases:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        author:
+          type: string
+          minLength: 1
+          nullable: true
+        authorAliases:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        chapterTitleAliases:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+              minLength: 1
+        createdAt:
+          type: string
+          format: date-time
     SourceResolutionInput:
       type: object
       additionalProperties: false
