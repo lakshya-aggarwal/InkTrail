@@ -51,7 +51,7 @@ test('migrations are recorded once and source foreign keys are enforced', () => 
   migrate(database);
   migrate(database);
 
-  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 15);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 16);
   assert.throws(() => database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'missing-novel', 1, 'One', '2026-10-11T00:00:00.000Z'));
   assert.throws(() => database.prepare(`
     insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
@@ -217,6 +217,107 @@ test('version 14 databases gain Kujiang source ownership update guards through m
   assert.throws(() => database.prepare("update novel_sources set novel_id = 'novel-b' where id = 'source-a'").run(), /Kujiang source identity belongs to another novel/);
   assert.equal(database.prepare("select novel_id from source_identities where id = 'identity-a'").get().novel_id, 'novel-a');
   assert.equal(database.prepare("select novel_id from novel_sources where id = 'source-a'").get().novel_id, 'novel-a');
+});
+
+test('original version 14 conflicts require repair before migration 16', (t) => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  const now = '2026-10-20T00:00:00.000Z';
+  for (const [version, name] of [
+    [1, '001-library.sql'], [2, '002-sources.sql'], [3, '003-normalize-kujiang-novel-source-urls.sql'],
+    [4, '004-translation-consistency.sql'], [5, '005-enforce-translation-consistency-ownership.sql'],
+    [6, '006-guard-translation-consistency-parent-ownership.sql'], [7, '007-durable-jobs-and-epub.sql'],
+    [8, '008-guard-job-targets-and-claims.sql'], [9, '009-guard-job-checkpoint-chapter-ownership.sql'],
+    [10, '010-kujiang-source-catalogs.sql'], [11, '011-durable-source-import-jobs.sql'],
+    [12, '012-novelping-source-resolutions.sql'], [13, '013-vetted-source-identities.sql']
+  ]) {
+    database.exec(readFileSync(new URL(`../../src/db/migrations/${name}`, import.meta.url), 'utf8'));
+    database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(version, now);
+  }
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-b', 'B', now, now);
+  database.prepare(`insert into source_identities (
+    id, novel_id, site, canonical_book_url, novel_title, novel_title_aliases_json,
+    author, author_aliases_json, chapter_title_aliases_json, created_at
+  ) values ('identity-a', 'novel-a', 'kujiang', 'https://www.kujiang.com/book/9', 'A', '[]', null, '[]', '{}', ?)`)
+    .run(now);
+  database.prepare(`insert into novel_sources (
+    id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at
+  ) values ('source-b', 'novel-b', 'kujiang', '9', 'https://www.kujiang.com/book/9', 'https://www.kujiang.com/book/9', ?, ?)`)
+    .run(now, now);
+  database.exec(`
+    create trigger novel_sources_reject_foreign_kujiang_source_identity
+    before insert on novel_sources
+    when new.site = 'kujiang' and exists (
+      select 1 from source_identities
+      where site = 'kujiang' and canonical_book_url = new.normalized_url and novel_id <> new.novel_id
+    ) begin
+      select raise(abort, 'Kujiang source identity belongs to another novel');
+    end;
+    create trigger source_identities_reject_foreign_kujiang_novel_source
+    before insert on source_identities
+    when new.site = 'kujiang' and exists (
+      select 1 from novel_sources
+      where site = 'kujiang' and normalized_url = new.canonical_book_url and novel_id <> new.novel_id
+    ) begin
+      select raise(abort, 'Kujiang source already belongs to another novel');
+    end;
+  `);
+  database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(14, now);
+
+  assert.throws(() => migrate(database), /repair required: conflicting Kujiang source identity ownership/);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 16').get().count, 0);
+});
+
+test('valid original version 14 databases upgrade through migration 16', (t) => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  const now = '2026-10-20T00:00:00.000Z';
+  for (const [version, name] of [
+    [1, '001-library.sql'], [2, '002-sources.sql'], [3, '003-normalize-kujiang-novel-source-urls.sql'],
+    [4, '004-translation-consistency.sql'], [5, '005-enforce-translation-consistency-ownership.sql'],
+    [6, '006-guard-translation-consistency-parent-ownership.sql'], [7, '007-durable-jobs-and-epub.sql'],
+    [8, '008-guard-job-targets-and-claims.sql'], [9, '009-guard-job-checkpoint-chapter-ownership.sql'],
+    [10, '010-kujiang-source-catalogs.sql'], [11, '011-durable-source-import-jobs.sql'],
+    [12, '012-novelping-source-resolutions.sql'], [13, '013-vetted-source-identities.sql']
+  ]) {
+    database.exec(readFileSync(new URL(`../../src/db/migrations/${name}`, import.meta.url), 'utf8'));
+    database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(version, now);
+  }
+  database.exec(`
+    create trigger novel_sources_reject_foreign_kujiang_source_identity
+    before insert on novel_sources
+    when new.site = 'kujiang' and exists (
+      select 1 from source_identities
+      where site = 'kujiang' and canonical_book_url = new.normalized_url and novel_id <> new.novel_id
+    ) begin
+      select raise(abort, 'Kujiang source identity belongs to another novel');
+    end;
+    create trigger source_identities_reject_foreign_kujiang_novel_source
+    before insert on source_identities
+    when new.site = 'kujiang' and exists (
+      select 1 from novel_sources
+      where site = 'kujiang' and normalized_url = new.canonical_book_url and novel_id <> new.novel_id
+    ) begin
+      select raise(abort, 'Kujiang source already belongs to another novel');
+    end;
+  `);
+  database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(14, now);
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
+  database.prepare(`insert into source_identities (
+    id, novel_id, site, canonical_book_url, novel_title, novel_title_aliases_json,
+    author, author_aliases_json, chapter_title_aliases_json, created_at
+  ) values ('identity-a', 'novel-a', 'kujiang', 'https://www.kujiang.com/book/9', 'A', '[]', null, '[]', '{}', ?)`)
+    .run(now);
+  database.prepare(`insert into novel_sources (
+    id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at
+  ) values ('source-a', 'novel-a', 'kujiang', '9', 'https://www.kujiang.com/book/9', 'https://www.kujiang.com/book/9', ?, ?)`)
+    .run(now, now);
+
+  migrate(database);
+
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 15').get().count, 1);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 16').get().count, 1);
 });
 
 test('additive migration preserves existing translation revisions', (t) => {
