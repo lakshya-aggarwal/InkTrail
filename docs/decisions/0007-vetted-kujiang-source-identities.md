@@ -21,12 +21,12 @@ A Kujiang canonical book URL also has one owner across the identity registry
 and durable `novel_sources`. Direct catalog discovery rejects an identity
 reserved by another novel before it creates a source or catalog, and SQLite
 triggers enforce the same rule for direct insertions and ownership-bearing
-updates in either table. Migration 14 validates historical rows first and
-installs insert guards, while migration 15 adds update guards for databases
-that already recorded migration 14. Migration 16 is the historical backstop:
-it validates databases that recorded the original insert-only migration 14
-before their schema version can advance. A cross-novel conflict requires
-repair before the validation migration can complete.
+updates in either table. Migration 14 is the published insert-only guard.
+Migration 15 adds update guards for databases that already recorded migration
+14. Migration 16 is the sole historical validation point: it validates rows
+from databases that recorded the original insert-only migration 14 before their
+schema version can advance. A cross-novel conflict requires repair before the
+validation migration can complete.
 
 `POST /api/v1/novels/{novelId}/source-identities` accepts only the documented
 identity fields. `GET` lists a novel's identities, and `DELETE` removes one

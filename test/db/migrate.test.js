@@ -4,6 +4,40 @@ import test from 'node:test';
 import { openDatabase } from '../../src/db/database.js';
 import { migrate } from '../../src/db/migrate.js';
 
+const originalMigration14 = `create trigger novel_sources_reject_foreign_kujiang_source_identity
+before insert on novel_sources
+when new.site = 'kujiang' and exists (
+  select 1
+  from source_identities
+  where site = 'kujiang'
+    and canonical_book_url = new.normalized_url
+    and novel_id <> new.novel_id
+)
+begin
+  select raise(abort, 'Kujiang source identity belongs to another novel');
+end;
+
+create trigger source_identities_reject_foreign_kujiang_novel_source
+before insert on source_identities
+when new.site = 'kujiang' and exists (
+  select 1
+  from novel_sources
+  where site = 'kujiang'
+    and normalized_url = new.canonical_book_url
+    and novel_id <> new.novel_id
+)
+begin
+  select raise(abort, 'Kujiang source already belongs to another novel');
+end;
+`;
+
+test('migration 14 remains byte-for-byte equal to its published insert guards', () => {
+  assert.equal(
+    readFileSync(new URL('../../src/db/migrations/014-guard-kujiang-source-identity-ownership.sql', import.meta.url), 'utf8'),
+    originalMigration14
+  );
+});
+
 test('migration creates library and source provenance tables', () => {
   const database = openDatabase({ databasePath: ':memory:' });
   migrate(database);
@@ -118,7 +152,7 @@ test('source identity ownership triggers reject direct cross-novel Kujiang write
   assert.equal(database.prepare("select novel_id from novel_sources where id = 'source-identity-a'").get().novel_id, 'novel-a');
 });
 
-test('version 13 databases with conflicting Kujiang source identity ownership require repair before migration 14', (t) => {
+test('version 13 databases with conflicting Kujiang source identity ownership require repair before migration 16', (t) => {
   const database = openDatabase({ databasePath: ':memory:' });
   t.after(() => database.close());
   const now = '2026-10-20T00:00:00.000Z';
@@ -146,10 +180,10 @@ test('version 13 databases with conflicting Kujiang source identity ownership re
     .run(now, now);
 
   assert.throws(() => migrate(database), /repair required: conflicting Kujiang source identity ownership/);
-  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 14').get().count, 0);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 16').get().count, 0);
 });
 
-test('version 13 databases with matching Kujiang source ownership upgrade through migrations 14 and 15', (t) => {
+test('version 13 databases with matching Kujiang source ownership upgrade through migration 16', (t) => {
   const database = openDatabase({ databasePath: ':memory:' });
   t.after(() => database.close());
   const now = '2026-10-20T00:00:00.000Z';
@@ -179,6 +213,7 @@ test('version 13 databases with matching Kujiang source ownership upgrade throug
 
   assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 14').get().count, 1);
   assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 15').get().count, 1);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 16').get().count, 1);
 });
 
 test('version 14 databases gain Kujiang source ownership update guards through migration 15', (t) => {
@@ -245,24 +280,7 @@ test('original version 14 conflicts require repair before migration 16', (t) => 
     id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at
   ) values ('source-b', 'novel-b', 'kujiang', '9', 'https://www.kujiang.com/book/9', 'https://www.kujiang.com/book/9', ?, ?)`)
     .run(now, now);
-  database.exec(`
-    create trigger novel_sources_reject_foreign_kujiang_source_identity
-    before insert on novel_sources
-    when new.site = 'kujiang' and exists (
-      select 1 from source_identities
-      where site = 'kujiang' and canonical_book_url = new.normalized_url and novel_id <> new.novel_id
-    ) begin
-      select raise(abort, 'Kujiang source identity belongs to another novel');
-    end;
-    create trigger source_identities_reject_foreign_kujiang_novel_source
-    before insert on source_identities
-    when new.site = 'kujiang' and exists (
-      select 1 from novel_sources
-      where site = 'kujiang' and normalized_url = new.canonical_book_url and novel_id <> new.novel_id
-    ) begin
-      select raise(abort, 'Kujiang source already belongs to another novel');
-    end;
-  `);
+  database.exec(originalMigration14);
   database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(14, now);
 
   assert.throws(() => migrate(database), /repair required: conflicting Kujiang source identity ownership/);
@@ -284,24 +302,7 @@ test('valid original version 14 databases upgrade through migration 16', (t) => 
     database.exec(readFileSync(new URL(`../../src/db/migrations/${name}`, import.meta.url), 'utf8'));
     database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(version, now);
   }
-  database.exec(`
-    create trigger novel_sources_reject_foreign_kujiang_source_identity
-    before insert on novel_sources
-    when new.site = 'kujiang' and exists (
-      select 1 from source_identities
-      where site = 'kujiang' and canonical_book_url = new.normalized_url and novel_id <> new.novel_id
-    ) begin
-      select raise(abort, 'Kujiang source identity belongs to another novel');
-    end;
-    create trigger source_identities_reject_foreign_kujiang_novel_source
-    before insert on source_identities
-    when new.site = 'kujiang' and exists (
-      select 1 from novel_sources
-      where site = 'kujiang' and normalized_url = new.canonical_book_url and novel_id <> new.novel_id
-    ) begin
-      select raise(abort, 'Kujiang source already belongs to another novel');
-    end;
-  `);
+  database.exec(originalMigration14);
   database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(14, now);
   database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
   database.prepare(`insert into source_identities (
