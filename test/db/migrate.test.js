@@ -31,6 +31,25 @@ begin
 end;
 `;
 
+const migrationNamesThrough16 = [
+  '001-library.sql', '002-sources.sql', '003-normalize-kujiang-novel-source-urls.sql',
+  '004-translation-consistency.sql', '005-enforce-translation-consistency-ownership.sql',
+  '006-guard-translation-consistency-parent-ownership.sql', '007-durable-jobs-and-epub.sql',
+  '008-guard-job-targets-and-claims.sql', '009-guard-job-checkpoint-chapter-ownership.sql',
+  '010-kujiang-source-catalogs.sql', '011-durable-source-import-jobs.sql',
+  '012-novelping-source-resolutions.sql', '013-vetted-source-identities.sql',
+  '014-guard-kujiang-source-identity-ownership.sql',
+  '015-guard-kujiang-source-identity-ownership-updates.sql',
+  '016-validate-historical-kujiang-source-identity-ownership.sql'
+];
+
+function installMigrationsThrough16(database, now) {
+  for (const [index, name] of migrationNamesThrough16.entries()) {
+    database.exec(readFileSync(new URL(`../../src/db/migrations/${name}`, import.meta.url), 'utf8'));
+    database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(index + 1, now);
+  }
+}
+
 test('migration 14 remains byte-for-byte equal to its published insert guards', () => {
   assert.equal(
     readFileSync(new URL('../../src/db/migrations/014-guard-kujiang-source-identity-ownership.sql', import.meta.url), 'utf8'),
@@ -85,7 +104,7 @@ test('migrations are recorded once and source foreign keys are enforced', () => 
   migrate(database);
   migrate(database);
 
-  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 16);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 17);
   assert.throws(() => database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'missing-novel', 1, 'One', '2026-10-11T00:00:00.000Z'));
   assert.throws(() => database.prepare(`
     insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
@@ -114,6 +133,63 @@ test('source identity storage rejects malformed JSON and a fifth identity at the
     insert.run(`identity-${bookId}`, `https://www.kujiang.com/book/${bookId}`, '[]', now);
   }
   assert.throws(() => insert.run('identity-13', 'https://www.kujiang.com/book/13', '[]', now), /source identity limit reached/);
+});
+
+test('source identity storage rejects a fifth identity moved into another novel at the database boundary', () => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  const now = '2026-10-21T00:00:00.000Z';
+  migrate(database);
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-b', 'B', now, now);
+  const insert = database.prepare(`
+    insert into source_identities (
+      id, novel_id, site, canonical_book_url, novel_title, novel_title_aliases_json,
+      author, author_aliases_json, chapter_title_aliases_json, created_at
+    ) values (?, ?, 'kujiang', ?, '源小说', '[]', null, '[]', '{}', ?)
+  `);
+  for (const bookId of [9, 10, 11, 12]) {
+    insert.run(`identity-a-${bookId}`, 'novel-a', `https://www.kujiang.com/book/${bookId}`, now);
+  }
+  insert.run('identity-b-13', 'novel-b', 'https://www.kujiang.com/book/13', now);
+
+  assert.throws(() => database.prepare("update source_identities set novel_id = 'novel-a' where id = 'identity-b-13'").run(), /source identity limit reached/);
+  database.prepare("update source_identities set novel_id = 'novel-a' where id = 'identity-a-9'").run();
+
+  assert.equal(database.prepare("select count(*) as count from source_identities where novel_id = 'novel-a'").get().count, 4);
+  assert.equal(database.prepare("select novel_id from source_identities where id = 'identity-b-13'").get().novel_id, 'novel-b');
+});
+
+test('version 16 databases with five source identities require repair before migration 17', (t) => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  const now = '2026-10-21T00:00:00.000Z';
+  installMigrationsThrough16(database, now);
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-b', 'B', now, now);
+  const insert = database.prepare(`
+    insert into source_identities (
+      id, novel_id, site, canonical_book_url, novel_title, novel_title_aliases_json,
+      author, author_aliases_json, chapter_title_aliases_json, created_at
+    ) values (?, ?, 'kujiang', ?, '源小说', '[]', null, '[]', '{}', ?)
+  `);
+  for (const bookId of [9, 10, 11, 12]) {
+    insert.run(`identity-a-${bookId}`, 'novel-a', `https://www.kujiang.com/book/${bookId}`, now);
+  }
+  insert.run('identity-b-13', 'novel-b', 'https://www.kujiang.com/book/13', now);
+  database.prepare("update source_identities set novel_id = 'novel-a' where id = 'identity-b-13'").run();
+
+  assert.throws(() => migrate(database), /repair required: source identity limit exceeded/);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 17').get().count, 0);
+});
+
+test('valid version 16 databases upgrade through migration 17', (t) => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  installMigrationsThrough16(database, '2026-10-21T00:00:00.000Z');
+
+  migrate(database);
+
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 17').get().count, 1);
 });
 
 test('source identity ownership triggers reject direct cross-novel Kujiang writes', () => {

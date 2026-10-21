@@ -25,8 +25,10 @@ updates in either table. Migration 14 is the published insert-only guard.
 Migration 15 adds update guards for databases that already recorded migration
 14. Migration 16 is the sole historical validation point: it validates rows
 from databases that recorded the original insert-only migration 14 before their
-schema version can advance. A cross-novel conflict requires repair before the
-validation migration can complete.
+schema version can advance. Migration 17 validates the four-identity bound for
+historical rows and rejects moves that would make a fifth identity belong to a
+novel. A conflict requires repair before the relevant validation migration can
+complete.
 
 `POST /api/v1/novels/{novelId}/source-identities` accepts only the documented
 identity fields. `GET` lists a novel's identities, and `DELETE` removes one
