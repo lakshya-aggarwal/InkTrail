@@ -82,7 +82,7 @@ test('source identity storage rejects malformed JSON and a fifth identity at the
   assert.throws(() => insert.run('identity-13', 'https://www.kujiang.com/book/13', '[]', now), /source identity limit reached/);
 });
 
-test('source identity ownership triggers reject direct cross-novel Kujiang insertions', () => {
+test('source identity ownership triggers reject direct cross-novel Kujiang writes', () => {
   const database = openDatabase({ databasePath: ':memory:' });
   const now = '2026-10-20T00:00:00.000Z';
   migrate(database);
@@ -100,6 +100,7 @@ test('source identity ownership triggers reject direct cross-novel Kujiang inser
   `);
 
   assert.throws(() => insertSource.run('source-b', 'novel-b', '9', 'https://www.kujiang.com/book/9', 'https://www.kujiang.com/book/9', now, now), /Kujiang source identity belongs to another novel/);
+  insertSource.run('source-identity-a', 'novel-a', '9', 'https://www.kujiang.com/book/9', 'https://www.kujiang.com/book/9', now, now);
   insertSource.run('source-a', 'novel-a', '10', 'https://www.kujiang.com/book/10', 'https://www.kujiang.com/book/10', now, now);
   assert.throws(() => database.prepare(`
     insert into source_identities (
@@ -107,6 +108,14 @@ test('source identity ownership triggers reject direct cross-novel Kujiang inser
       author, author_aliases_json, chapter_title_aliases_json, created_at
     ) values ('identity-b', 'novel-b', 'kujiang', 'https://www.kujiang.com/book/10', 'B', '[]', null, '[]', '{}', ?)
   `).run(now), /Kujiang source already belongs to another novel/);
+
+  const identityOwnerUpdate = database.prepare("update source_identities set novel_id = 'novel-b' where id = 'identity-a'");
+  const sourceOwnerUpdate = database.prepare("update novel_sources set novel_id = 'novel-b' where id = 'source-identity-a'");
+
+  assert.throws(() => identityOwnerUpdate.run(), /Kujiang source already belongs to another novel/);
+  assert.throws(() => sourceOwnerUpdate.run(), /Kujiang source identity belongs to another novel/);
+  assert.equal(database.prepare("select novel_id from source_identities where id = 'identity-a'").get().novel_id, 'novel-a');
+  assert.equal(database.prepare("select novel_id from novel_sources where id = 'source-identity-a'").get().novel_id, 'novel-a');
 });
 
 test('version 13 databases with conflicting Kujiang source identity ownership require repair before migration 14', (t) => {

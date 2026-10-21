@@ -20,9 +20,9 @@ data before writing it.
 A Kujiang canonical book URL also has one owner across the identity registry
 and durable `novel_sources`. Direct catalog discovery rejects an identity
 reserved by another novel before it creates a source or catalog, and SQLite
-triggers enforce the same rule for direct insertions in either table. Migration
-14 validates historical rows first: a cross-novel conflict requires repair
-before the guard migration can complete.
+triggers enforce the same rule for direct insertions and ownership-bearing
+updates in either table. Migration 14 validates historical rows first: a
+cross-novel conflict requires repair before the guard migration can complete.
 
 `POST /api/v1/novels/{novelId}/source-identities` accepts only the documented
 identity fields. `GET` lists a novel's identities, and `DELETE` removes one
