@@ -51,7 +51,7 @@ test('migrations are recorded once and source foreign keys are enforced', () => 
   migrate(database);
   migrate(database);
 
-  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 14);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations').get().count, 15);
   assert.throws(() => database.prepare('insert into chapters (id, novel_id, chapter_number, title, created_at) values (?, ?, ?, ?, ?)').run('chapter-a', 'missing-novel', 1, 'One', '2026-10-11T00:00:00.000Z'));
   assert.throws(() => database.prepare(`
     insert into novel_sources (id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at)
@@ -149,7 +149,7 @@ test('version 13 databases with conflicting Kujiang source identity ownership re
   assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 14').get().count, 0);
 });
 
-test('version 13 databases with matching Kujiang source ownership upgrade through migration 14', (t) => {
+test('version 13 databases with matching Kujiang source ownership upgrade through migrations 14 and 15', (t) => {
   const database = openDatabase({ databasePath: ':memory:' });
   t.after(() => database.close());
   const now = '2026-10-20T00:00:00.000Z';
@@ -178,6 +178,45 @@ test('version 13 databases with matching Kujiang source ownership upgrade throug
   migrate(database);
 
   assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 14').get().count, 1);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 15').get().count, 1);
+});
+
+test('version 14 databases gain Kujiang source ownership update guards through migration 15', (t) => {
+  const database = openDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  const now = '2026-10-20T00:00:00.000Z';
+  for (const [version, name] of [
+    [1, '001-library.sql'], [2, '002-sources.sql'], [3, '003-normalize-kujiang-novel-source-urls.sql'],
+    [4, '004-translation-consistency.sql'], [5, '005-enforce-translation-consistency-ownership.sql'],
+    [6, '006-guard-translation-consistency-parent-ownership.sql'], [7, '007-durable-jobs-and-epub.sql'],
+    [8, '008-guard-job-targets-and-claims.sql'], [9, '009-guard-job-checkpoint-chapter-ownership.sql'],
+    [10, '010-kujiang-source-catalogs.sql'], [11, '011-durable-source-import-jobs.sql'],
+    [12, '012-novelping-source-resolutions.sql'], [13, '013-vetted-source-identities.sql'],
+    [14, '014-guard-kujiang-source-identity-ownership.sql']
+  ]) {
+    database.exec(readFileSync(new URL(`../../src/db/migrations/${name}`, import.meta.url), 'utf8'));
+    database.prepare('insert into schema_migrations (version, applied_at) values (?, ?)').run(version, now);
+  }
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-a', 'A', now, now);
+  database.prepare('insert into novels (id, title, created_at, updated_at) values (?, ?, ?, ?)').run('novel-b', 'B', now, now);
+  database.prepare(`insert into source_identities (
+    id, novel_id, site, canonical_book_url, novel_title, novel_title_aliases_json,
+    author, author_aliases_json, chapter_title_aliases_json, created_at
+  ) values ('identity-a', 'novel-a', 'kujiang', 'https://www.kujiang.com/book/9', 'A', '[]', null, '[]', '{}', ?)`)
+    .run(now);
+  database.prepare(`insert into novel_sources (
+    id, novel_id, site, external_novel_id, source_url, normalized_url, selected_at, created_at
+  ) values ('source-a', 'novel-a', 'kujiang', '9', 'https://www.kujiang.com/book/9', 'https://www.kujiang.com/book/9', ?, ?)`)
+    .run(now, now);
+
+  migrate(database);
+
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 14').get().count, 1);
+  assert.equal(database.prepare('select count(*) as count from schema_migrations where version = 15').get().count, 1);
+  assert.throws(() => database.prepare("update source_identities set novel_id = 'novel-b' where id = 'identity-a'").run(), /Kujiang source already belongs to another novel/);
+  assert.throws(() => database.prepare("update novel_sources set novel_id = 'novel-b' where id = 'source-a'").run(), /Kujiang source identity belongs to another novel/);
+  assert.equal(database.prepare("select novel_id from source_identities where id = 'identity-a'").get().novel_id, 'novel-a');
+  assert.equal(database.prepare("select novel_id from novel_sources where id = 'source-a'").get().novel_id, 'novel-a');
 });
 
 test('additive migration preserves existing translation revisions', (t) => {
