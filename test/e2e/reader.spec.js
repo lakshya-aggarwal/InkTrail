@@ -105,6 +105,7 @@ async function installWorkspaceActionSettlementObserver(page) {
       ['source-catalog-form', 'submit'],
       ['source-resolution-form', 'submit'],
       ['source-identity-form', 'submit'],
+      ['source-chapter-import-form', 'submit'],
       ['source-identity-list', 'click'],
       ['import-resolved-source', 'click'],
       ['import-source-catalog', 'click'],
@@ -216,6 +217,12 @@ function fixtureChapterUrl(testInfo, sourceId) {
   return `https://www.kujiang.com/book/${externalId}/${externalId}`;
 }
 
+function fixtureNextChapterUrl(testInfo, sourceId) {
+  const projectOffset = testInfo.project.name === 'desktop-chromium' ? 910000 : 920000;
+  const externalId = projectOffset + sourceId;
+  return `https://www.kujiang.com/book/${externalId}/${externalId + 1}`;
+}
+
 function fixtureControlChapterUrl(testInfo, sourceId, mode) {
   const projectOffset = testInfo.project.name === 'desktop-chromium' ? 910000 : 920000;
   const externalNovelId = projectOffset + sourceId;
@@ -281,6 +288,78 @@ test('reader retains Chinese text and explains when English is unavailable', asy
   await expect(page.locator('#chapter-text')).toContainText('Chapter 1 text');
   await expect(page.getByText('English translation unavailable. Showing the original Chinese.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Report a translation issue' })).toBeHidden();
+});
+
+test('reader imports a direct Chinese source chapter into an empty novel', async ({ page }, testInfo) => {
+  await page.goto('/');
+  await page.getByLabel('Novel title', { exact: true }).fill(`Direct source reader ${testInfo.project.name}`);
+  await page.getByRole('button', { name: 'Create novel' }).click();
+  await expect(page).toHaveURL(/\?novel=[^&]+&chapter=1$/);
+  await page.reload();
+  const novelId = new URL(page.url()).searchParams.get('novel');
+
+  await expect(page.getByRole('heading', { name: 'No chapters yet' })).toBeVisible();
+  await expect(page.locator('#reader-status')).toHaveText('');
+  await expect(page.locator('#source-chapter-import')).toHaveAttribute('open', '');
+  await page.getByLabel('Chinese source chapter URL').fill(fixtureChapterUrl(testInfo, 17));
+  await page.getByLabel('Reader chapter number').fill('1');
+  const imported = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/source-chapters'));
+  await page.getByRole('button', { name: 'Import chapter' }).click();
+
+  expect((await imported).postDataJSON()).toEqual({ sourceUrl: fixtureChapterUrl(testInfo, 17), chapterNumber: 1 });
+  await expect(page.getByRole('heading', { name: '第2491章 归途 & 灯火' })).toBeVisible();
+  await expect(page.locator('#chapter-text')).toContainText('夜色落在城墙上，远处的灯火仍未熄灭。');
+  await expect(page).toHaveURL(/\?novel=[^&]+&chapter=1$/);
+  await expect(page.locator('#source-chapter-import')).not.toHaveAttribute('open', '');
+  await expect(page.getByLabel('Reader chapter number')).toHaveValue('2');
+  await expect.poll(async () => readProgress(page.request, novelId)).toBe(1);
+
+  await page.getByText('Import a Chinese source chapter', { exact: true }).click();
+  await page.getByLabel('Chinese source chapter URL').fill(fixtureNextChapterUrl(testInfo, 17));
+  const secondImport = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/source-chapters'));
+  await page.getByRole('button', { name: 'Import chapter' }).click();
+
+  expect((await secondImport).postDataJSON()).toEqual({ sourceUrl: fixtureNextChapterUrl(testInfo, 17), chapterNumber: 2 });
+  await expect(page).toHaveURL(/\?novel=[^&]+&chapter=2$/);
+  await expect.poll(async () => readProgress(page.request, novelId)).toBe(2);
+  await page.locator(`[data-novel-id="${novelId}"]`).click();
+  await expect(page).toHaveURL(/\?novel=[^&]+&chapter=2$/);
+  await page.getByRole('button', { name: 'Previous chapter' }).first().click();
+  await expect(page).toHaveURL(/\?novel=[^&]+&chapter=1$/);
+  await expect(page.getByLabel('Reader chapter number')).toHaveValue('');
+  await page.screenshot({ path: testInfo.outputPath('direct-source-import.png'), fullPage: true });
+});
+
+test('stale direct source import does not navigate a newer workspace', async ({ page }, testInfo) => {
+  const sourceBookId = testInfo.project.name === 'desktop-chromium' ? '971' : '972';
+  const { sourceNovelId, targetNovelId } = await seedSourceWorkspacePair(page.request, testInfo, {
+    sourceBookId,
+    title: 'Stale direct source import'
+  });
+  await installWorkspaceActionSettlementObserver(page);
+  await page.goto(`/?novel=${sourceNovelId}&chapter=1`);
+  const held = await holdWorkspaceAction(
+    page,
+    (request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/source-chapters')
+  );
+
+  try {
+    await page.getByText('Import a Chinese source chapter', { exact: true }).click();
+    await page.getByLabel('Chinese source chapter URL').fill(`https://www.kujiang.com/book/${sourceBookId}/${sourceBookId}8`);
+    await page.getByLabel('Reader chapter number').fill('2');
+    await page.getByRole('button', { name: 'Import chapter' }).click();
+    expect((await held.arrived).status).toBe(201);
+
+    await switchToFreshSourceWorkspace(page, { targetNovelId });
+    held.release();
+    await page.waitForFunction(() => window.__inktrailWorkspaceActionSettlements.includes('source-chapter-import-form'));
+    await expect(page).toHaveURL(new RegExp(`\\?novel=${targetNovelId}&chapter=1$`));
+    await expect(page.locator('#source-chapter-import-status')).toHaveText('');
+    await expect(page.locator('#import-source-chapter')).toBeEnabled();
+  } finally {
+    held.release();
+    await held.dispose();
+  }
 });
 
 test('reader uses the latest English revision', async ({ page }, testInfo) => {

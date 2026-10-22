@@ -53,6 +53,12 @@ const addSourceIdentity = document.querySelector('#add-source-identity');
 const sourceIdentityEditor = document.querySelector('#source-identity-editor');
 const sourceIdentitiesStatus = document.querySelector('#source-identities-status');
 const sourceIdentityList = document.querySelector('#source-identity-list');
+const sourceChapterImport = document.querySelector('#source-chapter-import');
+const sourceChapterImportForm = document.querySelector('#source-chapter-import-form');
+const sourceChapterUrl = document.querySelector('#source-chapter-url');
+const sourceChapterNumber = document.querySelector('#source-chapter-number');
+const importSourceChapter = document.querySelector('#import-source-chapter');
+const sourceChapterImportStatus = document.querySelector('#source-chapter-import-status');
 
 let novels = [];
 let currentChapter = null;
@@ -61,6 +67,7 @@ let workspaceToken = 0;
 let workspaceCatalogProgress = null;
 let workspaceResolution = null;
 let sourceIdentityRefreshToken = 0;
+let sourceChapterImportToken = 0;
 
 const activeStates = new Set(['queued', 'running', 'retrying']);
 
@@ -123,9 +130,38 @@ function clearSourceIdentities() {
   setSourceIdentitiesStatus('');
 }
 
+function setSourceChapterImportStatus(message, { error = false } = {}) {
+  sourceChapterImportStatus.setAttribute('role', error ? 'alert' : 'status');
+  sourceChapterImportStatus.textContent = message;
+}
+
+function hideSourceChapterImport() {
+  sourceChapterImportToken += 1;
+  sourceChapterImport.hidden = true;
+  sourceChapterImportForm.reset();
+  sourceChapterImport.open = false;
+  importSourceChapter.disabled = false;
+  setSourceChapterImportStatus('');
+}
+
+function showSourceChapterImport(chapterNumberValue, { open = false } = {}) {
+  sourceChapterImportToken += 1;
+  sourceChapterImport.hidden = false;
+  sourceChapterImportForm.reset();
+  sourceChapterNumber.value = chapterNumberValue === null ? '' : String(chapterNumberValue);
+  sourceChapterImport.open = open;
+  importSourceChapter.disabled = false;
+  setSourceChapterImportStatus('');
+}
+
+function sourceChapterImportStillSelected(novelId, token) {
+  return sourceChapterImportToken === token && readerState()?.novelId === novelId;
+}
+
 function hideWorkspace() {
   workspaceToken += 1;
   stopWorkspacePolling();
+  hideSourceChapterImport();
   workspace.hidden = true;
   workspaceJob.hidden = true;
   workspaceExport.hidden = true;
@@ -360,6 +396,7 @@ function showWorkspace(chapter) {
   importSourceCatalog.disabled = false;
   sourceImportJobControl.disabled = false;
   resolveSource.disabled = false;
+  showSourceChapterImport(chapter.nextChapterNumber === null ? chapter.chapterNumber + 1 : null);
   workspaceCatalogProgress = null;
   clearSourceResolution();
   clearSourceIdentities();
@@ -384,6 +421,8 @@ function showReaderMessage(title, message) {
   clearFeedbackStatus();
   reportTranslation.hidden = true;
   hideWorkspace();
+  const state = readerState();
+  if (state) showSourceChapterImport(state.chapter, { open: true });
   setNavigationAvailability(null);
 }
 
@@ -461,7 +500,12 @@ async function openNovel(novelId) {
   const number = novels.find((item) => item.id === novelId)?.readingProgress?.chapterNumber || 1;
   setReaderState(novelId, number);
   renderLibrary();
-  try { await showChapter(novelId, number, { focus: true }); } catch (error) { showReaderMessage('No chapters yet', 'This novel has no readable chapter yet.'); readerStatus.textContent = error.message; }
+  try {
+    await showChapter(novelId, number, { focus: true });
+  } catch (error) {
+    showReaderMessage('No chapters yet', 'This novel has no readable chapter yet.');
+    if (error.message !== 'chapter not found') readerStatus.textContent = error.message;
+  }
 }
 
 async function navigate(direction) {
@@ -573,6 +617,42 @@ createEpub.addEventListener('click', async () => {
     setWorkspaceStatus(error.message, { error: true });
   } finally {
     createEpub.disabled = false;
+  }
+});
+sourceChapterImportForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const state = readerState();
+  if (!state) return;
+  const novelId = state.novelId;
+  const token = sourceChapterImportToken;
+  const chapterNumberValue = Number(sourceChapterNumber.value);
+  const sourceUrl = sourceChapterUrl.value.trim();
+  try {
+    importSourceChapter.disabled = true;
+    setSourceChapterImportStatus('Importing source chapter.');
+    await request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-chapters`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sourceUrl, chapterNumber: chapterNumberValue })
+    });
+    if (!sourceChapterImportStillSelected(novelId, token)) return;
+    await refreshLibrary();
+    if (!sourceChapterImportStillSelected(novelId, token)) return;
+    await request(`/api/v1/novels/${encodeURIComponent(novelId)}/reading-progress`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chapterNumber: chapterNumberValue })
+    });
+    if (!sourceChapterImportStillSelected(novelId, token)) return;
+    await refreshLibrary();
+    if (!sourceChapterImportStillSelected(novelId, token)) return;
+    setReaderState(novelId, chapterNumberValue);
+    renderLibrary();
+    await showChapter(novelId, chapterNumberValue, { focus: true });
+  } catch (error) {
+    if (sourceChapterImportStillSelected(novelId, token)) setSourceChapterImportStatus(error.message, { error: true });
+  } finally {
+    if (sourceChapterImportStillSelected(novelId, token)) importSourceChapter.disabled = false;
   }
 });
 sourceCatalogForm.addEventListener('submit', async (event) => {
@@ -773,4 +853,12 @@ sourceImportJobControl.addEventListener('click', async () => {
 window.addEventListener('keydown', (event) => { if (event.target.matches('input, textarea, select, button, a, [contenteditable]')) return; if (event.key === 'ArrowLeft') navigate('previous'); if (event.key === 'ArrowRight') navigate('next'); });
 window.addEventListener('popstate', async () => { const state = readerState(); if (!state) return showReaderMessage('Choose a novel', 'Select a novel from your shelf to begin reading.'); try { await showChapter(state.novelId, state.chapter, { focus: true }); renderLibrary(); } catch (error) { showReaderMessage('Chapter unavailable', error.message); } });
 
-try { await refreshLibrary(); const state = readerState(); if (state) await showChapter(state.novelId, state.chapter); } catch (error) { libraryStatus.textContent = error.message; }
+try {
+  await refreshLibrary();
+  const state = readerState();
+  if (state) await showChapter(state.novelId, state.chapter);
+} catch (error) {
+  const state = readerState();
+  if (state && error.message === 'chapter not found') showReaderMessage('No chapters yet', 'This novel has no readable chapter yet.');
+  else libraryStatus.textContent = error.message;
+}

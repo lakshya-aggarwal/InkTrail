@@ -87,6 +87,18 @@
             <a hidden id="workspace-export-download">Download EPUB</a>
           </div>
         </section>
+        <details hidden id="source-chapter-import">
+          <summary>Import a Chinese source chapter</summary>
+          <form id="source-chapter-import-form">
+            <label for="source-chapter-url">Chinese source chapter URL</label>
+            <div class="source-chapter-import-controls">
+              <input autocomplete="url" id="source-chapter-url" inputmode="url" name="sourceUrl" placeholder="https://www.kujiang.com/book/..." required type="url">
+              <input aria-label="Reader chapter number" id="source-chapter-number" min="1" name="chapterNumber" required type="number">
+              <button id="import-source-chapter" type="submit">Import chapter</button>
+            </div>
+          </form>
+          <p id="source-chapter-import-status" role="status"></p>
+        </details>
         <p id="chapter-number"></p>
         <h1 id="chapter-title" tabindex="-1">Choose a novel</h1>
         <article id="chapter-text"><p>Select a novel from your shelf to begin reading.</p></article>

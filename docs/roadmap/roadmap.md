@@ -34,22 +34,18 @@ import, progress, pause/resume, and stale-navigation-safe controls. See [ADR
 0005](../decisions/0005-kujiang-catalog-and-durable-source-import.md) and the
 [implementation plan](../superpowers/plans/2026-10-17-inktrail-kujiang-source-catalog.md).
 
-## Next Plan Boundary
+## Direct Source Import
 
-Evidence-backed NovelPing source resolution. A reader will submit one canonical
-NovelPing chapter URL, and InkTrail will propose a Chinese source catalog only
-after exact chapter-number, declared novel-title alias, and declared
-chapter-title alias evidence passes the fixed `novelping-kujiang-v1` rule.
-The first implementation queries Kujiang only, and import stays explicit. A
-NovelPing chapter that needs another Chinese source remains unresolved until
-that source receives its own reviewed adapter boundary. See [ADR
-0006](../decisions/0006-evidence-backed-novelping-source-resolution.md) and the
-[implementation plan](../superpowers/plans/2026-10-17-inktrail-novelping-source-resolution.md).
+Complete. The reader exposes the existing guarded one-chapter source import
+flow for both empty and active novels. It intentionally stays adapter-neutral:
+the current URL policy remains Kujiang-only, while later reviewed adapters can
+use the same control without changing reader behavior.
 
 ## Later Boundaries
 
-1. Additional adapters and legacy import: migrate source sites one at a time and
-   build the opt-in, read-only JSON importer with duplicate review reporting.
+1. Additional adapters and legacy import: migrate source sites one at a time
+   with a current, fixture-backed parser boundary, then build the opt-in,
+   read-only JSON importer with duplicate review reporting.
 
 2. Additional resolver providers: add site-specific source-catalog adapters
    only after fixture-backed evidence and safety review.
