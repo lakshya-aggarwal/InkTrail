@@ -42,6 +42,29 @@
             <p id="source-resolution-status" role="status"></p>
             <button hidden id="import-resolved-source" type="button">Import source chapters</button>
           </div>
+          <section aria-labelledby="source-identities-title" id="source-identities">
+            <div class="source-identities-heading"><p class="eyebrow">Matching</p><h3 id="source-identities-title">Trusted source identities</h3></div>
+            <p id="source-identities-status" role="status"></p>
+            <ul aria-label="Trusted source identities" id="source-identity-list"></ul>
+            <details id="source-identity-editor">
+              <summary>Add trusted source</summary>
+              <form id="source-identity-form">
+                <label for="source-identity-book-url">Canonical book link</label>
+                <input autocomplete="url" id="source-identity-book-url" inputmode="url" name="bookUrl" placeholder="https://www.kujiang.com/book/..." required type="url">
+                <label for="source-identity-title">Source novel title</label>
+                <input id="source-identity-title" name="novelTitle" required type="text">
+                <label for="source-identity-title-aliases">Source novel title aliases</label>
+                <input id="source-identity-title-aliases" name="novelTitleAliases" placeholder="Comma-separated" type="text">
+                <label for="source-identity-author">Author</label>
+                <input id="source-identity-author" name="author" type="text">
+                <label for="source-identity-author-aliases">Author aliases</label>
+                <input id="source-identity-author-aliases" name="authorAliases" placeholder="Comma-separated" type="text">
+                <label for="source-identity-chapter-aliases">Chapter title aliases</label>
+                <textarea id="source-identity-chapter-aliases" name="chapterTitleAliases" placeholder='{"101":["chapter title"]}' rows="2"></textarea>
+                <button id="add-source-identity" type="submit">Save trusted source</button>
+              </form>
+            </details>
+          </section>
           <form id="source-catalog-form" novalidate>
             <label for="source-book-url">Add Kujiang source</label>
             <div class="source-catalog-controls"><input autocomplete="url" id="source-book-url" inputmode="url" name="bookUrl" placeholder="https://www.kujiang.com/book/..." required type="url"><button id="discover-source-catalog" type="submit">Discover source</button></div>

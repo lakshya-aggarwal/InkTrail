@@ -104,6 +104,8 @@ async function installWorkspaceActionSettlementObserver(page) {
     const observedActions = new Map([
       ['source-catalog-form', 'submit'],
       ['source-resolution-form', 'submit'],
+      ['source-identity-form', 'submit'],
+      ['source-identity-list', 'click'],
       ['import-resolved-source', 'click'],
       ['import-source-catalog', 'click'],
       ['source-import-job-control', 'click']
@@ -177,6 +179,10 @@ async function holdWorkspaceAction(page, predicate, { errorMessage } = {}) {
   };
 }
 
+async function openSourceIdentityEditor(page) {
+  await page.getByText('Add trusted source', { exact: true }).click();
+}
+
 function isWorkspaceRefresh(request, novelId) {
   const url = new URL(request.url());
   return request.method() === 'GET'
@@ -237,7 +243,7 @@ async function readProgress(request, novelId) {
 test('library creates and displays a novel', async ({ page }) => {
   await page.goto('/');
 
-  await page.getByLabel('Novel title').fill('A new shelf entry');
+  await page.getByLabel('Novel title', { exact: true }).fill('A new shelf entry');
   await page.getByRole('button', { name: 'Create novel' }).click();
 
   await expect(page.getByRole('button', { name: 'A new shelf entry' }).last()).toBeVisible();
@@ -262,7 +268,7 @@ test('arrow keys do not navigate while the novel title input has focus', async (
   await page.goto(`/?novel=${novelId}&chapter=1`);
   const initialUrl = page.url();
 
-  await page.getByLabel('Novel title').focus();
+  await page.getByLabel('Novel title', { exact: true }).focus();
   await page.keyboard.press('ArrowRight');
 
   await expect(page).toHaveURL(initialUrl);
@@ -433,6 +439,157 @@ test('reader keeps unresolved and retryable NovelPing checks concise and safe', 
   await expect(page.locator('#source-resolution-status')).toHaveAttribute('role', 'alert');
   await expect(page.getByLabel('NovelPing chapter URL')).toHaveValue('');
 });
+
+test('reader creates, lists, validates, and removes trusted source identities', async ({ page }, testInfo) => {
+  const novelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: 'Trusted identity reader novel' });
+  const bookId = testInfo.project.name === 'desktop-chromium' ? 301 : 401;
+  const invalidBookId = bookId + 1;
+  const bookUrl = `https://www.kujiang.com/book/${bookId}`;
+  await page.goto(`/?novel=${novelId}&chapter=1`);
+  await openSourceIdentityEditor(page);
+
+  await page.getByLabel('Canonical book link').fill(bookUrl);
+  await page.getByLabel('Source novel title', { exact: true }).fill('Reader source title');
+  await page.getByLabel('Source novel title aliases').fill('reader source, source reader');
+  await page.getByLabel('Author', { exact: true }).fill('Reader author');
+  await page.getByLabel('Author aliases').fill('reader, author');
+  await page.getByLabel('Chapter title aliases').fill('{"101":["Lamp fire"]}');
+  const created = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname === `/api/v1/novels/${novelId}/source-identities`);
+  await page.getByRole('button', { name: 'Save trusted source' }).click();
+  expect((await created).postDataJSON()).toEqual({
+    bookUrl,
+    novelTitle: 'Reader source title',
+    novelTitleAliases: ['reader source', 'source reader'],
+    author: 'Reader author',
+    authorAliases: ['reader', 'author'],
+    chapterTitleAliases: { '101': ['Lamp fire'] }
+  });
+  await expect(page.getByRole('link', { name: bookUrl })).toBeVisible();
+  await expect(page.getByText('Reader source title')).toBeVisible();
+  await expect(page.getByText('Reader author')).toBeVisible();
+
+  let invalidRequests = 0;
+  const observeInvalid = (request) => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === `/api/v1/novels/${novelId}/source-identities`) invalidRequests += 1;
+  };
+  page.on('request', observeInvalid);
+  try {
+    await openSourceIdentityEditor(page);
+    await page.getByLabel('Canonical book link').fill(`https://www.kujiang.com/book/${invalidBookId}`);
+    await page.getByLabel('Source novel title', { exact: true }).fill('Invalid aliases');
+    await page.getByLabel('Chapter title aliases').fill('{');
+    await page.getByRole('button', { name: 'Save trusted source' }).click();
+    await expect(page.locator('#source-identities-status')).toHaveText('Chapter title aliases must be valid JSON.');
+    expect(invalidRequests).toBe(0);
+  } finally {
+    page.off('request', observeInvalid);
+  }
+
+  const identityId = await page.locator('[data-source-identity-id]').getAttribute('data-source-identity-id');
+  let declinedDeletes = 0;
+  const observeDeclinedDelete = (request) => {
+    if (request.method() === 'DELETE' && new URL(request.url()).pathname === `/api/v1/novels/${novelId}/source-identities/${identityId}`) declinedDeletes += 1;
+  };
+  page.on('request', observeDeclinedDelete);
+  page.once('dialog', (dialog) => dialog.dismiss());
+  await page.getByRole('button', { name: 'Remove trusted source identity Reader source title' }).click();
+  await expect(page.getByRole('link', { name: bookUrl })).toBeVisible();
+  expect(declinedDeletes).toBe(0);
+  page.off('request', observeDeclinedDelete);
+  const removed = page.waitForResponse((response) => response.request().method() === 'DELETE' && new URL(response.url()).pathname === `/api/v1/novels/${novelId}/source-identities/${identityId}`);
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Remove trusted source identity Reader source title' }).click();
+  expect((await removed).status()).toBe(204);
+  await expect(page.getByRole('link', { name: bookUrl })).toBeHidden();
+});
+
+test('reader applies trusted source identity browser validation before sending', async ({ page }) => {
+  const novelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: 'Validated identity reader novel' });
+  let identityRequests = 0;
+  const observeIdentityRequest = (request) => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === `/api/v1/novels/${novelId}/source-identities`) identityRequests += 1;
+  };
+  page.on('request', observeIdentityRequest);
+  try {
+    await page.goto(`/?novel=${novelId}&chapter=1`);
+    await openSourceIdentityEditor(page);
+    await page.getByRole('button', { name: 'Save trusted source' }).click();
+    await expect(page.getByLabel('Canonical book link')).toBeFocused();
+    await page.getByLabel('Canonical book link').fill('https://www.kujiang.com/book/306');
+    await page.getByRole('button', { name: 'Save trusted source' }).click();
+    await expect(page.getByLabel('Source novel title', { exact: true })).toBeFocused();
+    await page.getByLabel('Source novel title', { exact: true }).fill('Validated source');
+    await page.getByLabel('Canonical book link').fill('not a URL');
+    await page.getByRole('button', { name: 'Save trusted source' }).click();
+    await expect(page.getByLabel('Canonical book link')).toBeFocused();
+    expect(identityRequests).toBe(0);
+  } finally {
+    page.off('request', observeIdentityRequest);
+  }
+});
+
+test('stale source identity refresh cannot overwrite a newer list', async ({ page }, testInfo) => {
+  const novelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: 'Identity refresh reader novel' });
+  const bookUrl = `https://www.kujiang.com/book/${testInfo.project.name === 'desktop-chromium' ? 305 : 405}`;
+  const held = await holdWorkspaceAction(
+    page,
+    (request) => request.method() === 'GET' && new URL(request.url()).pathname === `/api/v1/novels/${novelId}/source-identities`
+  );
+  try {
+    await page.goto(`/?novel=${novelId}&chapter=1`);
+    expect((await held.arrived).status).toBe(200);
+    await openSourceIdentityEditor(page);
+    await page.getByLabel('Canonical book link').fill(bookUrl);
+    await page.getByLabel('Source novel title', { exact: true }).fill('Fresh source identity');
+    await page.getByRole('button', { name: 'Save trusted source' }).click();
+    await expect(page.getByRole('link', { name: bookUrl })).toBeVisible();
+    const staleResponse = page.waitForResponse((response) => response.request().method() === 'GET' && new URL(response.url()).pathname === `/api/v1/novels/${novelId}/source-identities`);
+    held.release();
+    expect((await staleResponse).status()).toBe(200);
+    await expect(page.getByRole('link', { name: bookUrl })).toBeVisible();
+  } finally {
+    await held.dispose();
+  }
+});
+
+for (const action of ['create', 'remove']) {
+  test(`stale trusted source identity ${action} cannot update a newer workspace`, async ({ page }, testInfo) => {
+    const sourceNovelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: `Stale identity ${action} source` });
+    const targetNovelId = await seedNovelWithChapters(page.request, { chapterNumbers: [1], title: `Stale identity ${action} target` });
+    const sourceId = testInfo.project.name === 'desktop-chromium' ? 303 : 403;
+    if (action === 'remove') await seedResolutionIdentity(page.request, sourceNovelId, sourceId);
+    await installWorkspaceActionSettlementObserver(page);
+    await page.goto(`/?novel=${sourceNovelId}&chapter=1`);
+    if (action === 'create') await openSourceIdentityEditor(page);
+    if (action === 'remove') await expect(page.getByRole('button', { name: /Remove trusted source identity/ })).toBeVisible();
+    const held = await holdWorkspaceAction(
+      page,
+      (request) => request.method() === (action === 'create' ? 'POST' : 'DELETE') && new URL(request.url()).pathname.includes('/source-identities')
+    );
+
+    if (action === 'create') {
+      await page.getByLabel('Canonical book link').fill(`https://www.kujiang.com/book/${sourceId + 1}`);
+      await page.getByLabel('Source novel title', { exact: true }).fill('Stale identity');
+      await page.getByRole('button', { name: 'Save trusted source' }).click();
+    } else {
+      page.once('dialog', (dialog) => dialog.accept());
+      await page.getByRole('button', { name: /Remove trusted source identity/ }).click();
+    }
+    expect((await held.arrived).status).toBe(action === 'create' ? 201 : 204);
+    await page.locator(`[data-novel-id="${targetNovelId}"]`).click();
+    await expect(page).toHaveURL(new RegExp(`\\?novel=${targetNovelId}&chapter=1$`));
+    await expect(page.locator('#source-identity-list')).toBeEmpty();
+
+    try {
+      held.release();
+      await page.waitForFunction((targetId) => window.__inktrailWorkspaceActionSettlements.includes(targetId), action === 'create' ? 'source-identity-form' : 'source-identity-list');
+      await expect(page.locator('#source-identity-list')).toBeEmpty();
+      await expect(page.getByText('Add trusted source', { exact: true })).toBeVisible();
+    } finally {
+      await held.dispose();
+    }
+  });
+}
 
 for (const [name, errorMessage] of [
   ['completion', undefined],

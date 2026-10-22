@@ -42,6 +42,17 @@ const novelPingChapterUrl = document.querySelector('#novelping-chapter-url');
 const resolveSource = document.querySelector('#resolve-source');
 const sourceResolutionStatus = document.querySelector('#source-resolution-status');
 const importResolvedSource = document.querySelector('#import-resolved-source');
+const sourceIdentityForm = document.querySelector('#source-identity-form');
+const sourceIdentityBookUrl = document.querySelector('#source-identity-book-url');
+const sourceIdentityTitle = document.querySelector('#source-identity-title');
+const sourceIdentityTitleAliases = document.querySelector('#source-identity-title-aliases');
+const sourceIdentityAuthor = document.querySelector('#source-identity-author');
+const sourceIdentityAuthorAliases = document.querySelector('#source-identity-author-aliases');
+const sourceIdentityChapterAliases = document.querySelector('#source-identity-chapter-aliases');
+const addSourceIdentity = document.querySelector('#add-source-identity');
+const sourceIdentityEditor = document.querySelector('#source-identity-editor');
+const sourceIdentitiesStatus = document.querySelector('#source-identities-status');
+const sourceIdentityList = document.querySelector('#source-identity-list');
 
 let novels = [];
 let currentChapter = null;
@@ -49,6 +60,7 @@ let workspacePoll = null;
 let workspaceToken = 0;
 let workspaceCatalogProgress = null;
 let workspaceResolution = null;
+let sourceIdentityRefreshToken = 0;
 
 const activeStates = new Set(['queued', 'running', 'retrying']);
 
@@ -63,7 +75,7 @@ function setReaderState(novelId, chapter) { window.history.pushState({}, '', `/?
 
 async function request(path, options) {
   const response = await fetch(path, options);
-  if (response.ok) return response.json();
+  if (response.ok) return response.status === 204 ? null : response.json();
   const body = await response.json().catch(() => null);
   const error = new Error(body?.error?.message || 'The library could not be updated.');
   error.retryable = body?.error?.retryable === true;
@@ -97,6 +109,20 @@ function clearSourceResolution() {
   setSourceResolutionStatus('');
 }
 
+function setSourceIdentitiesStatus(message, { error = false } = {}) {
+  sourceIdentitiesStatus.setAttribute('role', error ? 'alert' : 'status');
+  sourceIdentitiesStatus.textContent = message;
+}
+
+function clearSourceIdentities() {
+  sourceIdentityRefreshToken += 1;
+  sourceIdentityForm.reset();
+  sourceIdentityEditor.open = false;
+  sourceIdentityList.replaceChildren();
+  addSourceIdentity.disabled = false;
+  setSourceIdentitiesStatus('');
+}
+
 function hideWorkspace() {
   workspaceToken += 1;
   stopWorkspacePolling();
@@ -108,6 +134,7 @@ function hideWorkspace() {
   sourceImportJob.hidden = true;
   workspaceCatalogProgress = null;
   clearSourceResolution();
+  clearSourceIdentities();
   clearWorkspaceStatus();
 }
 
@@ -207,7 +234,42 @@ function renderSourceResolution(detail) {
   setSourceResolutionStatus('This source check is temporarily unavailable. You can try again.', { error: true });
 }
 
+function renderSourceIdentities(items) {
+  sourceIdentityList.replaceChildren(...items.map((identity) => {
+    const item = document.createElement('li');
+    item.className = 'source-identity';
+    const title = document.createElement('span');
+    title.textContent = identity.novelTitle;
+    const link = document.createElement('a');
+    link.href = identity.canonicalBookUrl;
+    link.textContent = identity.canonicalBookUrl;
+    const author = identity.author ? document.createElement('span') : null;
+    if (author) author.textContent = identity.author;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.dataset.sourceIdentityId = identity.id;
+    remove.setAttribute('aria-label', `Remove trusted source identity ${identity.novelTitle}`);
+    remove.textContent = 'Remove';
+    item.append(title, link);
+    if (author) item.append(author);
+    item.append(remove);
+    return item;
+  }));
+}
+
+async function refreshSourceIdentities(novelId, token = workspaceToken) {
+  const refreshToken = ++sourceIdentityRefreshToken;
+  try {
+    const { items } = await request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-identities`);
+    if (!workspaceStillSelected(novelId, token) || refreshToken !== sourceIdentityRefreshToken) return;
+    renderSourceIdentities(items);
+  } catch (error) {
+    if (workspaceStillSelected(novelId, token) && refreshToken === sourceIdentityRefreshToken) setSourceIdentitiesStatus(error.message, { error: true });
+  }
+}
+
 async function refreshSourceResolution(novelId, token = workspaceToken) {
+  const identitiesRefresh = refreshSourceIdentities(novelId, token);
   try {
     const { items } = await request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-resolutions`);
     const resolution = currentSourceResolution(items);
@@ -220,6 +282,8 @@ async function refreshSourceResolution(novelId, token = workspaceToken) {
       importResolvedSource.hidden = true;
       setSourceResolutionStatus('This source check is temporarily unavailable. You can try again.', { error: true });
     }
+  } finally {
+    await identitiesRefresh;
   }
 }
 
@@ -298,6 +362,7 @@ function showWorkspace(chapter) {
   resolveSource.disabled = false;
   workspaceCatalogProgress = null;
   clearSourceResolution();
+  clearSourceIdentities();
   clearWorkspaceStatus();
   if (chapter.hasSourceProvenance) void refreshWorkspace(chapter.novelId, token);
   else void refreshSourceResolution(chapter.novelId, token);
@@ -530,6 +595,74 @@ sourceCatalogForm.addEventListener('submit', async (event) => {
     if (workspaceStillSelected(novelId, token)) setWorkspaceStatus(error.message, { error: true });
   } finally {
     if (workspaceStillSelected(novelId, token)) discoverSourceCatalog.disabled = false;
+  }
+});
+sourceIdentityForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!currentChapter) return;
+  const novelId = currentChapter.novelId;
+  const token = workspaceToken;
+  let chapterTitleAliases;
+  if (sourceIdentityChapterAliases.value.trim()) {
+    try {
+      chapterTitleAliases = JSON.parse(sourceIdentityChapterAliases.value);
+    } catch {
+      setSourceIdentitiesStatus('Chapter title aliases must be valid JSON.', { error: true });
+      return;
+    }
+    if (chapterTitleAliases === null || typeof chapterTitleAliases !== 'object' || Array.isArray(chapterTitleAliases)) {
+      setSourceIdentitiesStatus('Chapter title aliases must be a JSON object.', { error: true });
+      return;
+    }
+  }
+  const aliases = (value) => value.split(',').map((item) => item.trim()).filter(Boolean);
+  const novelTitleAliases = aliases(sourceIdentityTitleAliases.value);
+  const authorAliases = aliases(sourceIdentityAuthorAliases.value);
+  const input = {
+    bookUrl: sourceIdentityBookUrl.value.trim(),
+    novelTitle: sourceIdentityTitle.value.trim(),
+    ...(novelTitleAliases.length ? { novelTitleAliases } : {}),
+    ...(sourceIdentityAuthor.value.trim() ? { author: sourceIdentityAuthor.value.trim() } : {}),
+    ...(authorAliases.length ? { authorAliases } : {}),
+    ...(chapterTitleAliases === undefined ? {} : { chapterTitleAliases })
+  };
+  try {
+    addSourceIdentity.disabled = true;
+    setSourceIdentitiesStatus('Saving trusted source identity.');
+    await request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-identities`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input)
+    });
+    if (!workspaceStillSelected(novelId, token)) return;
+    sourceIdentityForm.reset();
+    sourceIdentityEditor.open = false;
+    setSourceIdentitiesStatus('Trusted source identity saved.');
+    await refreshSourceIdentities(novelId, token);
+  } catch (error) {
+    if (workspaceStillSelected(novelId, token)) setSourceIdentitiesStatus(error.message, { error: true });
+  } finally {
+    if (workspaceStillSelected(novelId, token)) addSourceIdentity.disabled = false;
+  }
+});
+sourceIdentityList.addEventListener('click', async (event) => {
+  const remove = event.target.closest('[data-source-identity-id]');
+  if (!remove || remove.disabled || !currentChapter) return;
+  const novelId = currentChapter.novelId;
+  const token = workspaceToken;
+  const identityId = remove.dataset.sourceIdentityId;
+  if (!window.confirm('Remove this trusted source identity? This cannot be undone.')) return;
+  try {
+    remove.disabled = true;
+    setSourceIdentitiesStatus('Removing trusted source identity.');
+    await request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-identities/${encodeURIComponent(identityId)}`, { method: 'DELETE' });
+    if (!workspaceStillSelected(novelId, token)) return;
+    setSourceIdentitiesStatus('Trusted source identity removed.');
+    await refreshSourceIdentities(novelId, token);
+  } catch (error) {
+    if (workspaceStillSelected(novelId, token)) setSourceIdentitiesStatus(error.message, { error: true });
+  } finally {
+    if (workspaceStillSelected(novelId, token)) remove.disabled = false;
   }
 });
 sourceResolutionForm.addEventListener('submit', async (event) => {
