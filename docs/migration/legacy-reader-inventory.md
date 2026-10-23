@@ -37,3 +37,24 @@ additional sources follow with their own fixtures and smoke checks.
 A later importer reads legacy state without changing it. It validates chapter
 identity and order, retains source provenance, imports translations as
 historical revisions, and produces a review report for duplicates or conflicts.
+
+## Snapshot Preflight
+
+The first migration delivery is a read-only preflight command:
+
+```sh
+pnpm inspect:legacy /path/to/WebNovels
+```
+
+It reads only `source-map.json`, `translation-state.json`,
+`translation-cache.json`, and `consistency-memory.json`. It prints aggregate
+counts only - never chapter source text or translated prose - and does not open
+or modify InkTrail's database.
+
+The report derives a novel identity only from known legacy URL shapes:
+NovelPing chapter URLs identify a NovelPing book, and Kujiang chapter URLs
+identify a Kujiang book. It counts complete cached Chinese source segments and
+English translations separately, so a later writer can import only
+source-faithful chapters as append-only historical revisions. Invalid links,
+missing cache records, duplicate source mappings, orphan navigation links, and
+global terminology memory are reported as blockers rather than guessed through.

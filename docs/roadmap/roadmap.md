@@ -41,6 +41,14 @@ flow for both empty and active novels. It intentionally stays adapter-neutral:
 the current URL policy remains Kujiang-only, while later reviewed adapters can
 use the same control without changing reader behavior.
 
+## Legacy Snapshot Preflight
+
+Complete. `pnpm inspect:legacy <legacy-state-directory>` reads the legacy JSON
+snapshot without writing to either application. It reports recognized
+NovelPing-to-Kujiang novel groups, cache and source-text eligibility, migration
+blockers, and global memory requiring an explicit novel assignment. The future
+writer will use this report as its approval boundary.
+
 ## Later Boundaries
 
 1. Additional adapters and legacy import: migrate source sites one at a time
