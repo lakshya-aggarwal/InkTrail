@@ -122,6 +122,19 @@ test('rejects unowned rows, unsafe URLs, cache-key mismatches, and normalized na
   assert.equal(normalizedReport.novels[0].duplicateSourceMappings, 1);
 });
 
+test('does not infer a novel owner from a shared Kujiang book alone', () => {
+  const data = snapshot();
+  data.translationState.chapters = [{ sourceUrl: 'https://www.kujiang.com/book/9/102', cacheKey: cacheKey('https://www.kujiang.com/book/9/102', 'third') }];
+  data.translationCache[cacheKey('https://www.kujiang.com/book/9/102', 'third')] = {
+    paragraphs: [{ source: 'Chinese three', translation: 'English three' }]
+  };
+
+  const report = inspectLegacySnapshot(data);
+  assert.equal(report.novels[0].translationRows, 0);
+  assert.equal(report.novels[0].historicalRevisionCandidates, 0);
+  assert.equal(report.issues.find(({ code }) => code === 'unassigned_translation_row').count, 1);
+});
+
 test('reads the exact legacy file set and rejects malformed snapshots', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'inktrail-legacy-snapshot-'));
   t.after(() => import('node:fs/promises').then(({ rm }) => rm(directory, { recursive: true, force: true })));

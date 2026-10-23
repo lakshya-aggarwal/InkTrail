@@ -116,6 +116,7 @@ export function inspectLegacySnapshot({ sourceMap, translationState, translation
   const issues = new Map();
   const summaries = new Map();
   const sourceBookOwners = new Map();
+  const sourceUrlOwners = new Map();
   const mappingSourceUrls = new Set();
 
   function findSummary(key) {
@@ -140,6 +141,13 @@ export function inspectLegacySnapshot({ sourceMap, translationState, translation
     }
     const summary = findSummary(novelKey);
     summary.sourceBookUrls.add(bookUrl);
+    const sourceOwner = sourceUrlOwners.get(sourceUrl.canonical);
+    if (sourceOwner && sourceOwner !== novelKey) {
+      issueCount(issues, 'ambiguous_source_chapter');
+      sourceUrlOwners.set(sourceUrl.canonical, null);
+    } else if (!sourceUrlOwners.has(sourceUrl.canonical)) {
+      sourceUrlOwners.set(sourceUrl.canonical, novelKey);
+    }
     if (mappingSourceUrls.has(sourceUrl.canonical)) {
       summary.duplicateSourceMappings += 1;
       issueCount(issues, 'duplicate_source_mapping');
@@ -168,7 +176,7 @@ export function inspectLegacySnapshot({ sourceMap, translationState, translation
     const rawSourceUrl = text(translation?.sourceUrl);
     const sourceUrl = sourceChapterUrl(rawSourceUrl);
     const bookUrl = sourceUrl ? sourceBookUrl(sourceUrl.canonical) : null;
-    const owner = bookUrl ? sourceBookOwners.get(bookUrl) : undefined;
+    const owner = sourceUrl ? sourceUrlOwners.get(sourceUrl.canonical) : undefined;
     const key = owner || null;
     if (!key) {
       issueCount(issues, 'unassigned_translation_row');

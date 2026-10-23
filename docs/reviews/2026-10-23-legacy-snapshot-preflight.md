@@ -23,8 +23,9 @@ fetch, SQLite write, automatic import, or reader UI control.
 
 The local legacy snapshot contains chapter-level URLs rather than a durable
 novel record. Its cached translation paragraphs retain both `source` and
-`translation`, allowing a future importer to preserve source-faithful chapters
-without a mandatory re-fetch when the preflight marks them complete.
+`translation`, which can preserve source-faithful chapters without a mandatory
+re-fetch only when the exact cached Kujiang chapter URL is also mapped to the
+selected legacy NovelPing book.
 
 ## Acceptance Boundary
 
@@ -43,11 +44,18 @@ book and chapter identities, binds each cache key to its exact source URL, and
 normalizes compatible source URL variants before duplicate and navigation-link
 checks. Focused regressions cover each case.
 
+A subsequent range-planning check found a fifth provenance flaw: the first
+version associated every cached chapter in a Kujiang book with a NovelPing book
+that happened to map to the same Kujiang book. The preflight now requires an
+exact canonical chapter URL mapping. This changes unproven cache rows into
+visible `unassigned_translation_row` blockers.
+
 ## Verification
 
-- Focused preflight tests: 4 passing.
-- Full backend test suite: 193 passing.
-- Real legacy snapshot: one recognized novel group with 2,774 complete cached
-  source and historical-revision candidates. It reports two orphan navigation
-  links, 213 unreferenced cache entries, and global memory requiring assignment.
+- Focused preflight tests: 5 passing after the provenance repair.
+- The corrected real legacy snapshot has one recognized novel group with 317
+  explicit mappings but no exact cached chapter matches. It reports two orphan
+  navigation links, 2,793 unassigned translation rows, 3,006 unreferenced cache
+  entries, and global memory requiring assignment.
+- Full backend suite: 194 passing after the provenance repair.
 - Final independent re-review: `REVIEW CLEAN`.

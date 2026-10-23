@@ -54,7 +54,9 @@ or modify InkTrail's database.
 The report derives a novel identity only from known legacy URL shapes:
 NovelPing chapter URLs identify a NovelPing book, and Kujiang chapter URLs
 identify a Kujiang book. It counts complete cached Chinese source segments and
-English translations separately, so a later writer can import only
-source-faithful chapters as append-only historical revisions. Invalid links,
-missing cache records, duplicate source mappings, orphan navigation links, and
-global terminology memory are reported as blockers rather than guessed through.
+English translations separately, but treats a cache row as importable only when
+its exact canonical Kujiang chapter URL is mapped to the selected NovelPing
+book. A shared Kujiang book URL is not sufficient provenance. Invalid links,
+missing cache records, duplicate source mappings, orphan navigation links,
+unassigned cache rows, and global terminology memory are reported as blockers
+rather than guessed through.
