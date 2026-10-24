@@ -28,18 +28,101 @@ playwright test`, `pnpm exec redocly lint openapi/inktrail.v1.yaml`, and the
 recorded persistence checks. The Redocly command uses its executable name,
 correcting the plan's scoped package-name spelling.
 
-## Run locally
+## Install
 
-`pnpm start` listens on `http://127.0.0.1:4277` by default, leaving the legacy
-WebNovels app on `4177` untouched. Set `PORT` to use another valid port, for
-example `PORT=4278 pnpm start`.
+InkTrail is currently a local, single-user application. It stores its SQLite
+database and EPUB exports on your machine, and the desktop command is a
+development wrapper rather than a public installer.
 
-## Desktop wrapper
+### Prerequisites
 
-The Tauri wrapper starts InkTrail on an ephemeral loopback port and opens the
-existing reader in a native window. For local development, run
-`pnpm desktop:dev`. See [the desktop wrapper architecture](docs/architecture/desktop-wrapper.md)
-for its staging and release boundary.
+- [Node.js](https://nodejs.org/) 24.19 or newer, plus `pnpm`.
+- Git.
+- For translation: [Ollama](https://ollama.com/) with the local `qwen3:30b`
+  model.
+- For the optional desktop wrapper: stable Rust and the system dependencies
+  listed in the [official Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+
+Clone the repository and install its locked dependencies:
+
+```sh
+git clone https://github.com/lakshya-aggarwal/InkTrail.git
+cd InkTrail
+corepack enable
+pnpm install --frozen-lockfile
+```
+
+If Corepack is unavailable in your Node installation, install `pnpm` using its
+[official installation guide](https://pnpm.io/installation), then run the same
+`pnpm install --frozen-lockfile` command.
+
+For translations, download the supported model once:
+
+```sh
+ollama pull qwen3:30b
+```
+
+Run `ollama serve` in a separate terminal when Ollama is not already running.
+Reading, source import, and local library management do not require Ollama;
+queued translations do.
+
+## Get started
+
+### 1. Start the reader
+
+For browser-based development:
+
+```sh
+pnpm start
+```
+
+Open [http://127.0.0.1:4277](http://127.0.0.1:4277). InkTrail uses this port
+by default and leaves the legacy WebNovels app on `4177` untouched. Set `PORT`
+to use another valid port, for example `PORT=4278 pnpm start`.
+
+For the native development wrapper, after installing the desktop prerequisites:
+
+```sh
+pnpm desktop:dev
+```
+
+This stages the local runtime, starts InkTrail on an ephemeral loopback port,
+and opens the reader in a native window. See [the desktop wrapper architecture](docs/architecture/desktop-wrapper.md)
+for the runtime and release boundary.
+
+### 2. Add a novel and source chapters
+
+1. In **Your shelf**, enter a title and select **Create novel**.
+2. Select the novel, then choose one supported source workflow:
+   - Paste a NovelPing chapter URL into **NovelPing chapter URL**, select
+     **Resolve**, then select **Import source chapters** after a verified match.
+   - Paste a canonical Kujiang book URL into **Add Kujiang source**, select
+     **Discover source**, then select **Import source chapters**.
+3. Wait for the background import to finish. InkTrail preserves the source
+   chapter order and allows safe retries after transient fetch failures.
+
+### 3. Translate, read, and export
+
+1. Set the desired chapter range under **Continue this novel** and select
+   **Queue translation**. InkTrail uses local Ollama `qwen3:30b`, records
+   revisions instead of overwriting prior translations, and checks for common
+   quality and consistency issues.
+2. Read with the previous and next controls or your arrow keys. Select
+   **Report a translation issue** to suggest a context-aware correction.
+3. Select **Create EPUB** when translated chapters are available, then use the
+   displayed download link. The export is an immutable snapshot, so later
+   translations can continue without changing an already downloaded EPUB.
+
+## Everyday commands
+
+| Command | Purpose |
+| --- | --- |
+| `pnpm start` | Run the local browser reader. |
+| `pnpm desktop:dev` | Stage and run the Tauri development wrapper. |
+| `pnpm test` | Run the Node test suite. |
+| `pnpm test:e2e` | Run the Playwright reader checks. |
+| `pnpm backup:data <data-dir> <backup-dir>` | Create a verified local backup. |
+| `pnpm restore:data <backup-dir> <new-data-dir>` | Restore into a new directory without overwriting existing data. |
 
 ## Back up and restore local data
 
