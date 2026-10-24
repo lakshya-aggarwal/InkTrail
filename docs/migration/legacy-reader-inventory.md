@@ -84,3 +84,23 @@ The manifest establishes a Kujiang-source ordering only. It must not be used to
 claim that the cached chapters belong to a NovelPing work solely because the two
 share a source book or title. A future import should create or select a
 Kujiang-source novel through an explicit user choice.
+
+## Transactional Import
+
+After reviewing a manifest with `provenanceReady: true`, import it explicitly:
+
+```sh
+pnpm import:legacy /path/to/inktrail.sqlite /path/to/WebNovels legacy-kujiang-9.manifest.json "Novel title"
+```
+
+The importer first verifies that every selected manifest chapter has one legacy
+state row, an exact cache-key URL match, complete Chinese source paragraphs, and
+complete English translations. Only then does one SQLite transaction create the
+source novel, ordered chapters, source provenance, and one `legacy-cache`
+translation revision per chapter. Any failure leaves no partial novel.
+
+The canonical Kujiang book URL is the idempotency boundary. Re-running a
+manifest reuses matching chapters, while a later manifest can append previously
+unreconciled catalog ordinals. An existing source mapping with different source
+content or reader chapter order stops the entire transaction rather than
+overwriting user data.

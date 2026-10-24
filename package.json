@@ -11,6 +11,7 @@
     "start:source-fixture": "node scripts/source-fixture-server.js",
     "inspect:legacy": "node scripts/inspect-legacy-snapshot.js",
     "reconcile:legacy": "node scripts/reconcile-legacy-catalog.js",
+    "import:legacy": "node scripts/import-legacy-catalog.js",
     "test": "node --test test/**/*.test.js",
     "test:e2e": "playwright test"
   },

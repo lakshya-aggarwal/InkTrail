@@ -57,6 +57,15 @@ manifest for exact cached chapter URLs. It deliberately establishes only
 Kujiang-source provenance and exposes cache health separately from identity
 conflicts. No importer or cross-site ownership inference is included.
 
+## Legacy Catalog Import
+
+Complete. `pnpm import:legacy <database-path> <legacy-state-directory>
+<manifest-path> <novel-title>` consumes only a reviewed, source-only manifest.
+It verifies cache completeness before a single transaction creates an ordered
+Kujiang-source novel, source provenance, and historical translation revisions.
+It is idempotent for matching sources and can append new reconciled ordinals,
+but fails closed on conflicting content or chapter placement.
+
 ## Later Boundaries
 
 1. Additional adapters and legacy import: migrate source sites one at a time

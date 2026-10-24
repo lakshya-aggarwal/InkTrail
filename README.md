@@ -17,6 +17,7 @@ remains separate and unchanged during migration.
 - [SQLite decision](docs/decisions/0001-sqlite-and-in-process-jobs.md)
 - [Legacy migration inventory](docs/migration/legacy-reader-inventory.md)
 - [Roadmap](docs/roadmap/roadmap.md)
+- [Public-release readiness](docs/release/public-release-readiness.md)
 - [Design review](docs/reviews/2026-10-11-design-spec-self-review.md)
 - [Foundation review](docs/reviews/2026-10-11-foundation-review.md)
 - [Kujiang source-adapter decision](docs/decisions/0002-first-source-adapter-kujiang.md)
@@ -51,3 +52,14 @@ catalog's ordinal order, and reports cache health separately. Redirect standard
 output to a reviewed file if it will be used by a future importer. This command
 does not write either application and does not prove a relationship to a
 NovelPing book.
+
+## Import a reviewed legacy manifest
+
+`pnpm import:legacy /path/to/inktrail.sqlite /path/to/WebNovels manifest.json "Novel title"`
+imports only a `provenanceReady` Kujiang manifest. It validates every selected
+legacy cache row before one SQLite transaction creates anything, then creates or
+reuses the Kujiang-source novel, preserves catalog chapter order, and records
+the cached English text as an immutable historical revision. Re-running the
+same manifest is safe; a later manifest can append newly reconciled chapters.
+The command never changes the legacy directory and never treats a Kujiang book
+as evidence that it belongs to a NovelPing work.
