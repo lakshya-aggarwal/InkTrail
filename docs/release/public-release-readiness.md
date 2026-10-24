@@ -7,8 +7,10 @@ machine. This is not yet a public hosted release.
 ## Before a Private Desktop Alpha
 
 - Package the current loopback service into an installable desktop application.
-- Add a first-run path for provider configuration, local data location, backup,
-  and restore.
+- Add a first-run path for provider configuration and local data location.
+- A checksum-verified, non-destructive local backup and restore command is now
+  available. Surface it in the desktop application and verify it in a packaged
+  build.
 - Exercise the packaged reader, source import, translation, job recovery, and
   EPUB flow on supported desktop platforms.
 - Publish a supported-source policy and confirm that each enabled source is

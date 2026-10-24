@@ -34,6 +34,20 @@ correcting the plan's scoped package-name spelling.
 WebNovels app on `4177` untouched. Set `PORT` to use another valid port, for
 example `PORT=4278 pnpm start`.
 
+## Back up and restore local data
+
+Stop InkTrail before backing up. `pnpm backup:data /path/to/data
+/path/to/new-backup` makes a checksum-verified copy of the entire data
+directory, including SQLite and EPUB exports. The backup destination must not
+already exist.
+
+`pnpm restore:data /path/to/backup /path/to/new-data` verifies every backup
+file and restores it only into a new path. It never overwrites an existing data
+directory, so the original remains available until the restored copy has been
+checked. Start against it with `INKTRAIL_DATA_DIR=/path/to/new-data pnpm start`.
+If a backup or restore command is forcibly terminated, confirm it is no longer
+running before removing its adjacent `.inktrail-lock` file and retrying.
+
 ## Inspect a legacy snapshot
 
 `pnpm inspect:legacy /path/to/WebNovels` reads the four legacy JSON files and

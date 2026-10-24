@@ -12,6 +12,8 @@
     "inspect:legacy": "node scripts/inspect-legacy-snapshot.js",
     "reconcile:legacy": "node scripts/reconcile-legacy-catalog.js",
     "import:legacy": "node scripts/import-legacy-catalog.js",
+    "backup:data": "node scripts/backup-local-data.js",
+    "restore:data": "node scripts/restore-local-data.js",
     "test": "node --test test/**/*.test.js",
     "test:e2e": "playwright test"
   },

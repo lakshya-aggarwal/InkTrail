@@ -66,6 +66,14 @@ Kujiang-source novel, source provenance, and historical translation revisions.
 It is idempotent for matching sources and can append new reconciled ordinals,
 but fails closed on conflicting content or chapter placement.
 
+## Local Data Backup And Restore
+
+Complete. `pnpm backup:data` creates a checksum-verified copy of the complete
+local data directory, including SQLite and EPUB exports. `pnpm restore:data`
+validates that copy and restores only to a new directory, preserving the
+original library as a rollback path. The remaining private-alpha work is to
+surface this workflow from a packaged desktop application.
+
 ## Later Boundaries
 
 1. Additional adapters and legacy import: migrate source sites one at a time
