@@ -1,0 +1,29 @@
+{
+  "name": "inktrail",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.19.0"
+  },
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "start:source-fixture": "node scripts/source-fixture-server.js",
+    "inspect:legacy": "node scripts/inspect-legacy-snapshot.js",
+    "reconcile:legacy": "node scripts/reconcile-legacy-catalog.js",
+    "import:legacy": "node scripts/import-legacy-catalog.js",
+    "backup:data": "node scripts/backup-local-data.js",
+    "restore:data": "node scripts/restore-local-data.js",
+    "desktop:prepare": "node scripts/prepare-desktop-runtime.js",
+    "desktop:dev": "node scripts/prepare-desktop-runtime.js && cargo run --manifest-path desktop/src-tauri/Cargo.toml",
+    "test": "node --test test/**/*.test.js",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@redocly/cli": "^1.30.0"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1"
+  }
+}

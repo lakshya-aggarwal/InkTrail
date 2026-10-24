@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="InkTrail">
+  <rect width="512" height="512" rx="112" fill="#1e2b27"/>
+  <path d="M350 96c-93 19-163 94-183 190-12 57 2 105 43 143 2-68 27-128 74-178 26-28 55-49 89-62-60 48-100 111-116 180 48-20 85-57 105-105 30-72 27-127-12-168Z" fill="#d8c5a0"/>
+  <path d="M148 403c49-53 100-95 160-127" fill="none" stroke="#e9dfc9" stroke-linecap="round" stroke-width="20"/>
+  <circle cx="145" cy="405" r="22" fill="#e9dfc9"/>
+</svg>

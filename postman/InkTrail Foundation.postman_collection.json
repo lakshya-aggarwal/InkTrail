@@ -1,0 +1,377 @@
+{
+  "info": {
+    "name": "InkTrail Foundation",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Run `pnpm start:source-fixture` before the source-import requests. That local server injects saved HTML and a deterministic fetch failure; it never requests Kujiang. Run Create novel first to set `novelId`."
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:4278", "description": "Fixture-only server started by pnpm start:source-fixture." },
+    { "key": "novelId", "value": "", "description": "Set by the Create novel request." },
+    { "key": "translationRevisionId", "value": "", "description": "Set by Translate source chapter." },
+    { "key": "feedbackId", "value": "", "description": "Set by Submit translation feedback." },
+    { "key": "jobId", "value": "", "description": "Set by Create translation job." },
+    { "key": "catalogId", "value": "", "description": "Set by Discover source catalog." },
+    { "key": "sourceIdentityId", "value": "", "description": "Set by Create vetted source identity." },
+    { "key": "sourceResolutionAttemptId", "value": "", "description": "Set by Resolve NovelPing source." },
+    { "key": "exportId", "value": "", "description": "Set by Create EPUB export." },
+    { "key": "missingNovelId", "value": "missing" },
+    { "key": "fixtureSourceChapterUrl", "value": "https://www.kujiang.com/book/9/906595", "description": "Canonical Kujiang identity served from test/fixtures/kujiang/chapter.html by the local fixture server." },
+    { "key": "fixtureSourceBookUrl", "value": "https://www.kujiang.com/book/9", "description": "Canonical Kujiang book identity served from test/fixtures/kujiang/catalog.html by the local fixture server." },
+    { "key": "fixtureNovelPingUrl", "value": "https://novelping.com/book/return-of-the-war-god/chapter-2-lamp-fire", "description": "Canonical NovelPing fixture identity served from test/fixtures/novelping/chapter-2.html by the local fixture server." },
+    { "key": "fixtureSourceFetchFailureUrl", "value": "https://www.kujiang.com/book/9/906597", "description": "Canonical Kujiang identity that the local fixture server deterministically fails." },
+    { "key": "unsupportedSourceUrl", "value": "https://example.test/chapter" }
+  ],
+  "item": [
+    {
+      "name": "Get health",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/health" }
+    },
+    {
+      "name": "List novels",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels" }
+    },
+    {
+      "name": "Create novel",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"title\": \"Return of the War God\",\n  \"sourceUrl\": \"https://example.test/book/war-god\"\n}" },
+        "url": "{{baseUrl}}/api/v1/novels"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.collectionVariables.set('novelId', pm.response.json().id);"]
+        }
+      }]
+    },
+    {
+      "name": "Get novel",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}" }
+    },
+    {
+      "name": "Record chapter",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"chapterNumber\": 1,\n  \"title\": \"Arrival\",\n  \"originalText\": \"Original Chinese\"\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/chapters"
+      }
+    },
+    {
+      "name": "Discover source catalog",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"bookUrl\": \"{{fixtureSourceBookUrl}}\"\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-catalogs"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('creates or returns a source catalog without importing it', () => pm.expect([200, 201]).to.include(pm.response.code));", "pm.collectionVariables.set('catalogId', pm.response.json().id);"]
+        }
+      }]
+    },
+    {
+      "name": "List source catalogs",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-catalogs" }
+    },
+    {
+      "name": "Get source catalog",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-catalogs/{{catalogId}}" }
+    },
+    {
+      "name": "Create vetted source identity",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"bookUrl\": \"{{fixtureSourceBookUrl}}\",\n  \"novelTitle\": \"战神狂飙\",\n  \"novelTitleAliases\": [\"return of the war god\"],\n  \"chapterTitleAliases\": {\n    \"101\": [\"lamp fire\"]\n  }\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-identities"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('creates a vetted source identity', () => pm.response.to.have.status(201));", "pm.test('returns a canonical Kujiang identity', () => pm.expect(pm.response.json().canonicalBookUrl).to.eql(pm.collectionVariables.get('fixtureSourceBookUrl')));", "pm.collectionVariables.set('sourceIdentityId', pm.response.json().id);"]
+        }
+      }]
+    },
+    {
+      "name": "List vetted source identities",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-identities" },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('lists the vetted source identity', () => pm.expect(pm.response.json().items.map((identity) => identity.id)).to.include(pm.collectionVariables.get('sourceIdentityId')));"]
+        }
+      }]
+    },
+    {
+      "name": "Resolve NovelPing source",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "fixture-source-resolution-1" }],
+        "body": { "mode": "raw", "raw": "{\n  \"novelPingUrl\": \"{{fixtureNovelPingUrl}}\"\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-resolutions"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('persists or replays a safe source resolution without importing chapters', () => pm.expect([200, 201]).to.include(pm.response.code));", "pm.test('accepts the fixture source', () => pm.expect(pm.response.json().state).to.eql('resolved'));", "pm.collectionVariables.set('sourceResolutionAttemptId', pm.response.json().id);"]
+        }
+      }]
+    },
+    {
+      "name": "Get source resolution",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-resolutions/{{sourceResolutionAttemptId}}" }
+    },
+    {
+      "name": "Create resolved source import job",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Idempotency-Key", "value": "fixture-source-import-job-1" }],
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-resolutions/{{sourceResolutionAttemptId}}/catalog-import"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('queues or returns a durable source import job', () => pm.expect([200, 201]).to.include(pm.response.code));", "pm.collectionVariables.set('jobId', pm.response.json().id);"]
+        }
+      }]
+    },
+    {
+      "name": "Delete vetted source identity",
+      "request": { "method": "DELETE", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-identities/{{sourceIdentityId}}" },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('removes the vetted source identity', () => pm.response.to.have.status(204));"]
+        }
+      }]
+    },
+    {
+      "name": "Import source chapter",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"sourceUrl\": \"{{fixtureSourceChapterUrl}}\",\n  \"chapterNumber\": 2491\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-chapters"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('creates the fixture source chapter', () => pm.response.to.have.status(201));"]
+        }
+      }]
+    },
+    {
+      "name": "Import source chapter - validation error",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"sourceUrl\": \"{{fixtureSourceChapterUrl}}\",\n  \"chapterNumber\": 0\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-chapters"
+      }
+    },
+    {
+      "name": "Import source chapter - unsupported source",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"sourceUrl\": \"{{unsupportedSourceUrl}}\",\n  \"chapterNumber\": 2491\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-chapters"
+      }
+    },
+    {
+      "name": "Import source chapter - novel not found",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"sourceUrl\": \"{{fixtureSourceChapterUrl}}\",\n  \"chapterNumber\": 2491\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{missingNovelId}}/source-chapters"
+      }
+    },
+    {
+      "name": "Import source chapter - conflict",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"sourceUrl\": \"{{fixtureSourceChapterUrl}}\",\n  \"chapterNumber\": 2492\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-chapters"
+      }
+    },
+    {
+      "name": "Import source chapter - source fetch failed",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"sourceUrl\": \"{{fixtureSourceFetchFailureUrl}}\",\n  \"chapterNumber\": 2491\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/source-chapters"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('returns the stable fixture fetch failure', () => {", "  pm.response.to.have.status(502);", "  pm.expect(pm.response.json().error).to.deep.equal({ code: 'source_fetch_failed', message: 'Source chapter could not be fetched', retryable: true });", "});"]
+        }
+      }]
+    },
+    {
+      "name": "Translate source chapter",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/chapters/2491/translations"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('creates a fixture translation revision', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('translationRevisionId', pm.response.json().revision.id);"]
+        }
+      }]
+    },
+    {
+      "name": "Submit translation feedback",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"translationRevisionId\": \"{{translationRevisionId}}\",\n  \"selectedText\": \"Fixture translation 1.\",\n  \"sourceContext\": \"Fixture source context\",\n  \"translatedContext\": \"Fixture translation 1.\",\n  \"proposedCorrection\": \"Corrected fixture translation.\",\n  \"reason\": \"Verified terminology\"\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/chapters/2491/feedback"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('creates a pending feedback report', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('feedbackId', pm.response.json().id);"]
+        }
+      }]
+    },
+    {
+      "name": "List translation feedback",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/chapters/2491/feedback" }
+    },
+    {
+      "name": "Approve translation feedback",
+      "request": {
+        "method": "PATCH",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"status\": \"approved\",\n  \"memory\": {\n    \"sourceTerm\": \"fixture term\",\n    \"preferredRendering\": \"fixture term\",\n    \"semanticScope\": \"fixture\",\n    \"evidence\": \"Verified terminology\",\n    \"confidence\": 1\n  }\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/feedback/{{feedbackId}}"
+      }
+    },
+    {
+      "name": "List verified memory",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/verified-memory" }
+    },
+    {
+      "name": "Get reader chapter",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/chapters/1" }
+    },
+    {
+      "name": "Set reading progress",
+      "request": {
+        "method": "PATCH",
+        "header": [{ "key": "content-type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"chapterNumber\": 1\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/reading-progress"
+      }
+    },
+    {
+      "name": "Create translation job",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "fixture-translation-job-1" }],
+        "body": { "mode": "raw", "raw": "{\n  \"novelId\": \"{{novelId}}\",\n  \"type\": \"translate_chapters\",\n  \"target\": { \"chapterNumbers\": [2491] }\n}" },
+        "url": "{{baseUrl}}/api/v1/jobs"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('queues or returns a durable translation job', () => pm.expect([200, 201]).to.include(pm.response.code));", "pm.collectionVariables.set('jobId', pm.response.json().id);"]
+        }
+      }]
+    },
+    {
+      "name": "List novel jobs",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/jobs?novelId={{novelId}}" }
+    },
+    {
+      "name": "Get job",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/jobs/{{jobId}}?novelId={{novelId}}" }
+    },
+    {
+      "name": "Pause job",
+      "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/jobs/{{jobId}}/pause?novelId={{novelId}}" }
+    },
+    {
+      "name": "Resume job",
+      "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/jobs/{{jobId}}/resume?novelId={{novelId}}" }
+    },
+    {
+      "name": "Create EPUB export",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "content-type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "fixture-epub-export-1" }],
+        "body": { "mode": "raw", "raw": "{\n  \"selection\": { \"chapterNumbers\": [2491] }\n}" },
+        "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/exports"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('captures and queues an immutable EPUB', () => pm.expect([200, 201]).to.include(pm.response.code));", "pm.collectionVariables.set('exportId', pm.response.json().export.id);"]
+        }
+      }]
+    },
+    {
+      "name": "List EPUB exports",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/exports" }
+    },
+    {
+      "name": "Get EPUB export",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/exports/{{exportId}}" }
+    },
+    {
+      "name": "Download unavailable EPUB export",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/exports/{{exportId}}/download" },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('reports unavailable EPUB before the asynchronous build completes', () => pm.expect(pm.response.code).to.eql(409));"]
+        }
+      }]
+    },
+    {
+      "name": "Poll EPUB export",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/exports/{{exportId}}" },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["const state = pm.response.json().export.state;", "pm.test('returns a valid asynchronous EPUB state', () => pm.expect(['queued', 'building', 'available', 'failed']).to.include(state));", "if (state === 'available') { pm.execution.setNextRequest('Download available EPUB export'); } else if (state === 'failed') { pm.test('EPUB build must not fail', () => pm.expect(state).to.eql('available')); } else { pm.execution.setNextRequest('Poll EPUB export'); }"]
+        }
+      }]
+    },
+    {
+      "name": "Download available EPUB export",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/novels/{{novelId}}/exports/{{exportId}}/download" },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": ["pm.test('downloads only an available EPUB', () => pm.expect(pm.response.code).to.eql(200));", "pm.test('returns an EPUB attachment', () => { pm.expect(pm.response.headers.get('content-type')).to.include('application/epub+zip'); pm.expect(pm.response.headers.get('content-disposition')).to.include('.epub'); });"]
+        }
+      }]
+    }
+  ]
+}

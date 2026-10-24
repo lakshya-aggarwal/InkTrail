@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>InkTrail</title>
+    <link href="/favicon.svg" rel="icon" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main>
+      <aside aria-label="Your shelf" id="library">
+        <div class="shelf-heading"><p class="eyebrow">InkTrail</p><h2>Your shelf</h2></div>
+        <form id="novel-form">
+          <label for="novel-title">Novel title</label>
+          <div class="novel-form-controls"><input id="novel-title" name="title" required type="text"><button type="submit">Create novel</button></div>
+        </form>
+        <p id="library-status" role="status"></p>
+        <ul aria-label="Novels" id="novel-list"></ul>
+      </aside>
+      <section aria-labelledby="chapter-title" id="reader">
+        <nav aria-label="Chapter navigation" class="chapter-navigation"><button type="button" data-direction="previous" aria-label="Previous chapter">Previous</button><button type="button" data-direction="next" aria-label="Next chapter">Next</button></nav>
+        <section aria-label="Translation workspace" hidden id="translation-workspace">
+          <div class="workspace-heading"><p class="eyebrow">Workspace</p><h2>Continue this novel</h2></div>
+          <form id="workspace-form" novalidate>
+            <fieldset>
+              <legend>Chapter range</legend>
+              <label for="workspace-from">From</label>
+              <input id="workspace-from" min="1" name="from" required type="number">
+              <label for="workspace-to">To</label>
+              <input id="workspace-to" min="1" name="to" required type="number">
+              <label for="translation-model">Ollama model</label>
+              <select aria-describedby="translation-model-status" disabled id="translation-model" name="model"><option>Loading local models</option></select>
+            </fieldset>
+            <div class="workspace-actions">
+              <button id="queue-translation" type="submit">Queue translation</button>
+              <button id="create-epub" type="button">Create EPUB</button>
+            </div>
+          </form>
+          <p id="translation-model-status" role="status"></p>
+          <form id="source-resolution-form" novalidate>
+            <label for="novelping-chapter-url">NovelPing chapter URL</label>
+            <div class="source-resolution-controls"><input autocomplete="url" id="novelping-chapter-url" inputmode="url" name="novelPingUrl" placeholder="https://novelping.com/book/..." required type="url"><button id="resolve-source" type="submit">Resolve</button></div>
+          </form>
+          <div id="source-resolution">
+            <p id="source-resolution-status" role="status"></p>
+            <button hidden id="import-resolved-source" type="button">Import source chapters</button>
+          </div>
+          <section aria-labelledby="source-identities-title" id="source-identities">
+            <div class="source-identities-heading"><p class="eyebrow">Matching</p><h3 id="source-identities-title">Trusted source identities</h3></div>
+            <p id="source-identities-status" role="status"></p>
+            <ul aria-label="Trusted source identities" id="source-identity-list"></ul>
+            <details id="source-identity-editor">
+              <summary>Add trusted source</summary>
+              <form id="source-identity-form">
+                <label for="source-identity-book-url">Canonical book link</label>
+                <input autocomplete="url" id="source-identity-book-url" inputmode="url" name="bookUrl" placeholder="https://www.kujiang.com/book/..." required type="url">
+                <label for="source-identity-title">Source novel title</label>
+                <input id="source-identity-title" name="novelTitle" required type="text">
+                <label for="source-identity-title-aliases">Source novel title aliases</label>
+                <input id="source-identity-title-aliases" name="novelTitleAliases" placeholder="Comma-separated" type="text">
+                <label for="source-identity-author">Author</label>
+                <input id="source-identity-author" name="author" type="text">
+                <label for="source-identity-author-aliases">Author aliases</label>
+                <input id="source-identity-author-aliases" name="authorAliases" placeholder="Comma-separated" type="text">
+                <label for="source-identity-chapter-aliases">Chapter title aliases</label>
+                <textarea id="source-identity-chapter-aliases" name="chapterTitleAliases" placeholder='{"101":["chapter title"]}' rows="2"></textarea>
+                <button id="add-source-identity" type="submit">Save trusted source</button>
+              </form>
+            </details>
+          </section>
+          <form id="source-catalog-form" novalidate>
+            <label for="source-book-url">Add Kujiang source</label>
+            <div class="source-catalog-controls"><input autocomplete="url" id="source-book-url" inputmode="url" name="bookUrl" placeholder="https://www.kujiang.com/book/..." required type="url"><button id="discover-source-catalog" type="submit">Discover source</button></div>
+          </form>
+          <div hidden id="source-catalog">
+            <p id="source-catalog-status" role="status"></p>
+            <button id="import-source-catalog" type="button">Import source chapters</button>
+            <div hidden id="source-import-job">
+              <p id="source-import-job-status" role="status"></p>
+              <button id="source-import-job-control" type="button"></button>
+            </div>
+          </div>
+          <p id="workspace-status" role="status" tabindex="-1"></p>
+          <div id="workspace-job" hidden>
+            <p id="workspace-job-status" role="status"></p>
+            <button id="workspace-job-control" type="button"></button>
+          </div>
+          <div id="workspace-export" hidden>
+            <p id="workspace-export-status" role="status"></p>
+            <a hidden id="workspace-export-download">Download EPUB</a>
+          </div>
+        </section>
+        <details hidden id="source-chapter-import">
+          <summary>Import a Chinese source chapter</summary>
+          <form id="source-chapter-import-form">
+            <label for="source-chapter-url">Chinese source chapter URL</label>
+            <div class="source-chapter-import-controls">
+              <input autocomplete="url" id="source-chapter-url" inputmode="url" name="sourceUrl" placeholder="https://www.kujiang.com/book/..." required type="url">
+              <input aria-label="Reader chapter number" id="source-chapter-number" min="1" name="chapterNumber" required type="number">
+              <button id="import-source-chapter" type="submit">Import chapter</button>
+            </div>
+          </form>
+          <p id="source-chapter-import-status" role="status"></p>
+        </details>
+        <p id="chapter-number"></p>
+        <h1 id="chapter-title" tabindex="-1">Choose a novel</h1>
+        <article id="chapter-text"><p>Select a novel from your shelf to begin reading.</p></article>
+        <p id="translation-status" role="status"></p>
+        <button aria-controls="feedback-form" aria-expanded="false" hidden id="report-translation" type="button">Report a translation issue</button>
+        <form aria-describedby="feedback-status" hidden id="feedback-form" novalidate>
+          <h2>Report a translation issue</h2>
+          <label for="feedback-selected-text">Selected passage</label>
+          <textarea id="feedback-selected-text" name="selectedText" required rows="4"></textarea>
+          <label for="feedback-correction">Suggested correction</label>
+          <textarea id="feedback-correction" name="proposedCorrection" required rows="4"></textarea>
+          <label for="feedback-reason">What needs attention?</label>
+          <textarea id="feedback-reason" name="reason" required rows="3"></textarea>
+          <div class="feedback-actions"><button type="submit">Send report</button><button data-feedback-cancel type="button">Cancel</button></div>
+        </form>
+        <p id="feedback-status" role="status" tabindex="-1"></p>
+        <p id="reader-status" role="alert"></p>
+        <nav aria-label="Chapter navigation at end of chapter" class="chapter-navigation chapter-navigation-end"><button type="button" data-direction="previous" aria-label="Previous chapter">Previous</button><button type="button" data-direction="next" aria-label="Next chapter">Next</button></nav>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
