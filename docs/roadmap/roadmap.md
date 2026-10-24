@@ -49,6 +49,14 @@ NovelPing-to-Kujiang novel groups, cache and source-text eligibility, migration
 blockers, and global memory requiring an explicit novel assignment. The future
 writer will use this report as its approval boundary.
 
+## Legacy Catalog Reconciliation
+
+Complete. `pnpm reconcile:legacy <legacy-state-directory> <kujiang-book-url>`
+uses the vetted Kujiang catalog adapter to produce a read-only, ordered source
+manifest for exact cached chapter URLs. It deliberately establishes only
+Kujiang-source provenance and exposes cache health separately from identity
+conflicts. No importer or cross-site ownership inference is included.
+
 ## Later Boundaries
 
 1. Additional adapters and legacy import: migrate source sites one at a time

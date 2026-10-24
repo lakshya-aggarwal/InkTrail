@@ -41,3 +41,13 @@ SQLite database. The report groups recognized NovelPing and Kujiang identities,
 counts source-faithful cached chapter candidates, and reports duplicate links,
 missing cache rows, and global memory that needs explicit novel assignment
 before a later import.
+
+## Reconcile a legacy Kujiang catalog
+
+`pnpm reconcile:legacy /path/to/WebNovels https://www.kujiang.com/book/9`
+fetches that book's public catalog and prints a read-only manifest. It matches
+legacy state rows only by exact canonical Kujiang chapter URL, preserves the
+catalog's ordinal order, and reports cache health separately. Redirect standard
+output to a reviewed file if it will be used by a future importer. This command
+does not write either application and does not prove a relationship to a
+NovelPing book.

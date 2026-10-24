@@ -54,6 +54,11 @@ function sourceBookUrl(value) {
   return chapter ? `https://www.kujiang.com/book/${chapter.match[1]}` : null;
 }
 
+function canonicalSourceBookUrl(value) {
+  const book = canonicalUrl(value, 'www.kujiang.com', /^\/book\/([1-9]\d*)\/?$/);
+  return book ? book.canonical : null;
+}
+
 function legacyNovelUrl(value) {
   const chapter = canonicalUrl(value, 'novelping.com', /^\/book\/([a-z0-9][a-z0-9-]*)\/[^/]+\/?$/i);
   return chapter ? `https://novelping.com/book/${chapter.match[1]}` : null;
@@ -70,6 +75,26 @@ function cachePayloadStatus(payload) {
   const sourceText = payload.paragraphs.length > 0 && payload.paragraphs.every((paragraph) => text(paragraph?.source));
   const translation = sourceText && payload.paragraphs.every((paragraph) => text(paragraph?.translation));
   return { sourceText, translation };
+}
+
+export function canonicalLegacyKujiangChapterUrl(value) {
+  return sourceChapterUrl(value)?.canonical ?? null;
+}
+
+export function canonicalLegacyKujiangBookUrl(value) {
+  return canonicalSourceBookUrl(value);
+}
+
+export function legacyKujiangBookUrlForChapter(value) {
+  return sourceBookUrl(value);
+}
+
+export function legacyCacheKeyMatchesSourceUrl(cacheKey, sourceUrl) {
+  return cacheKeyMatchesSourceUrl(cacheKey, sourceUrl);
+}
+
+export function legacyCachePayloadStatus(payload) {
+  return cachePayloadStatus(payload);
 }
 
 function summaryFor(key) {
@@ -230,7 +255,7 @@ export function inspectLegacySnapshot({ sourceMap, translationState, translation
   };
 }
 
-export async function readLegacySnapshot(directory, { read = readFile } = {}) {
+export async function readLegacySnapshotData(directory, { read = readFile } = {}) {
   if (!text(directory)) throw new LegacySnapshotError('A legacy snapshot directory is required.');
   const loaded = await Promise.all(Object.entries(LEGACY_FILES).map(async ([name, file]) => {
     try {
@@ -239,5 +264,9 @@ export async function readLegacySnapshot(directory, { read = readFile } = {}) {
       throw new LegacySnapshotError(`Unable to read ${file}: ${error.message}`);
     }
   }));
-  return inspectLegacySnapshot(Object.fromEntries(loaded));
+  return Object.fromEntries(loaded);
+}
+
+export async function readLegacySnapshot(directory, options) {
+  return inspectLegacySnapshot(await readLegacySnapshotData(directory, options));
 }

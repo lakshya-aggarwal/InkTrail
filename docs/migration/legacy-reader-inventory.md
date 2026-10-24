@@ -60,3 +60,27 @@ book. A shared Kujiang book URL is not sufficient provenance. Invalid links,
 missing cache records, duplicate source mappings, orphan navigation links,
 unassigned cache rows, and global terminology memory are reported as blockers
 rather than guessed through.
+
+## Catalog Reconciliation Manifest
+
+When cached rows have no exact NovelPing source-map counterpart, the next
+read-only boundary is catalog reconciliation:
+
+```sh
+pnpm reconcile:legacy /path/to/WebNovels https://www.kujiang.com/book/9 > legacy-kujiang-9.manifest.json
+```
+
+It fetches the public Kujiang catalog through InkTrail's existing validated
+adapter and emits only the canonical source book, ordinal chapter entries, cache
+health counts, and issue codes. It does not emit chapter prose, change SQLite,
+or write to the legacy directory. `provenanceReady` is false for duplicate or
+unlisted legacy source URLs from the selected Kujiang book, so a future importer
+must reject such a manifest. Rows from other Kujiang books are reported but do
+not block reconciliation of the selected book.
+Missing or incomplete cached text is reported as cache health instead: the
+source catalog remains sufficient to re-fetch that chapter later.
+
+The manifest establishes a Kujiang-source ordering only. It must not be used to
+claim that the cached chapters belong to a NovelPing work solely because the two
+share a source book or title. A future import should create or select a
+Kujiang-source novel through an explicit user choice.
