@@ -1,4 +1,4 @@
-import { ConflictError } from '../domain/errors.js';
+import { ConflictError, TranslationProviderError } from '../domain/errors.js';
 import { checkTranslationQuality } from './quality-checker.js';
 
 function withinTransaction(database, action) {
@@ -15,14 +15,20 @@ function withinTransaction(database, action) {
 
 export function createTranslationService({ database, repositories, provider, qualityChecker = checkTranslationQuality }) {
   return {
-    async translateChapter({ novelId, chapterNumber, claim = null }) {
+    async listModels() {
+      if (typeof provider.listModels !== 'function') throw new TranslationProviderError('translation model list is unavailable');
+      return { items: await provider.listModels(), defaultModel: provider.model };
+    },
+
+    async translateChapter({ novelId, chapterNumber, claim = null, model = undefined }) {
       const chapter = repositories.chapters.getSourcedChapter(novelId, chapterNumber);
       const priorContext = repositories.chapters.listPriorSourcedOriginalTexts(novelId, chapterNumber);
       const verifiedMemory = repositories.memory.listVerifiedMemoryEntries(novelId);
       const translation = await provider.translate({
         originalChinese: chapter.originalText,
         priorContext,
-        verifiedMemory
+        verifiedMemory,
+        ...(model === undefined ? {} : { model })
       });
       const findings = qualityChecker({ originalChinese: chapter.originalText, paragraphs: translation.paragraphs });
 
@@ -44,7 +50,7 @@ export function createTranslationService({ database, repositories, provider, qua
           chapterId: chapter.id,
           translatedText: translation.paragraphs.join('\n\n'),
           provider: provider.provider,
-          model: provider.model
+          model: translation.model ?? provider.model
         });
         return {
           revision,

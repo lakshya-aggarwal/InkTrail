@@ -39,7 +39,7 @@ test('uses a bounded structured Ollama request and returns only translated parag
     }
   });
 
-  assert.deepEqual(await provider.translate(input), { paragraphs: ['Night fell over the city wall.', 'He saw the road home.'] });
+  assert.deepEqual(await provider.translate(input), { paragraphs: ['Night fell over the city wall.', 'He saw the road home.'], model: 'qwen3:30b' });
   assert.equal(provider.provider, 'ollama');
   assert.equal(provider.model, 'qwen3:30b');
   assert.equal(calls[0].url, 'http://127.0.0.1:11434/api/generate');
@@ -48,6 +48,25 @@ test('uses a bounded structured Ollama request and returns only translated parag
   assert.equal(body.model, 'qwen3:30b');
   assert.equal(body.stream, false);
   assert.equal(body.format.additionalProperties, false);
+});
+
+test('lists installed Ollama models and captures a selected model for its translation', async () => {
+  const calls = [];
+  const provider = createOllamaTranslationProvider({
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith('/api/tags')) return new Response(JSON.stringify({ models: [{ name: 'qwen3:30b', size: 1 }, { name: 'qwen3:8b' }] }));
+      return response(['Night fell over the city wall.', 'He saw the road home.']);
+    }
+  });
+
+  assert.deepEqual(await provider.listModels(), ['qwen3:30b', 'qwen3:8b']);
+  const translation = await provider.translate({ ...input, model: 'qwen3:8b' });
+
+  assert.equal(calls[0].url, 'http://127.0.0.1:11434/api/tags');
+  assert.equal(calls[0].options.redirect, 'error');
+  assert.equal(JSON.parse(calls[1].options.body).model, 'qwen3:8b');
+  assert.equal(translation.model, 'qwen3:8b');
 });
 
 test('rejects redirects before the loopback request can leave Ollama', async () => {

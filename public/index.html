@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>InkTrail</title>
+    <link href="/favicon.svg" rel="icon" type="image/svg+xml">
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
@@ -28,12 +29,15 @@
               <input id="workspace-from" min="1" name="from" required type="number">
               <label for="workspace-to">To</label>
               <input id="workspace-to" min="1" name="to" required type="number">
+              <label for="translation-model">Ollama model</label>
+              <select aria-describedby="translation-model-status" disabled id="translation-model" name="model"><option>Loading local models</option></select>
             </fieldset>
             <div class="workspace-actions">
               <button id="queue-translation" type="submit">Queue translation</button>
               <button id="create-epub" type="button">Create EPUB</button>
             </div>
           </form>
+          <p id="translation-model-status" role="status"></p>
           <form id="source-resolution-form" novalidate>
             <label for="novelping-chapter-url">NovelPing chapter URL</label>
             <div class="source-resolution-controls"><input autocomplete="url" id="novelping-chapter-url" inputmode="url" name="novelPingUrl" placeholder="https://novelping.com/book/..." required type="url"><button id="resolve-source" type="submit">Resolve</button></div>

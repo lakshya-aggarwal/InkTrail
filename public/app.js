@@ -19,6 +19,8 @@ const workspace = document.querySelector('#translation-workspace');
 const workspaceForm = document.querySelector('#workspace-form');
 const workspaceFrom = document.querySelector('#workspace-from');
 const workspaceTo = document.querySelector('#workspace-to');
+const translationModel = document.querySelector('#translation-model');
+const translationModelStatus = document.querySelector('#translation-model-status');
 const queueTranslation = document.querySelector('#queue-translation');
 const createEpub = document.querySelector('#create-epub');
 const workspaceStatus = document.querySelector('#workspace-status');
@@ -65,6 +67,7 @@ let currentChapter = null;
 let workspacePoll = null;
 let workspaceToken = 0;
 let workspaceCatalogProgress = null;
+let translationModelRefreshToken = 0;
 let workspaceResolution = null;
 let sourceIdentityRefreshToken = 0;
 let sourceChapterImportToken = 0;
@@ -160,6 +163,7 @@ function sourceChapterImportStillSelected(novelId, token) {
 
 function hideWorkspace() {
   workspaceToken += 1;
+  translationModelRefreshToken += 1;
   stopWorkspacePolling();
   hideSourceChapterImport();
   workspace.hidden = true;
@@ -172,6 +176,9 @@ function hideWorkspace() {
   clearSourceResolution();
   clearSourceIdentities();
   clearWorkspaceStatus();
+  translationModel.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Loading local models' }));
+  translationModel.disabled = true;
+  translationModelStatus.textContent = '';
 }
 
 function rangeSelection() {
@@ -185,6 +192,28 @@ function rangeSelection() {
 
 function workspaceStillSelected(novelId, token) {
   return workspaceToken === token && currentChapter?.novelId === novelId;
+}
+
+async function refreshTranslationModels(novelId, token = workspaceToken) {
+  const refreshToken = ++translationModelRefreshToken;
+  translationModel.disabled = true;
+  translationModel.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Loading local models' }));
+  translationModelStatus.textContent = 'Checking local Ollama models.';
+  try {
+    const { items, defaultModel } = await request('/api/v1/translation-models');
+    if (!workspaceStillSelected(novelId, token) || refreshToken !== translationModelRefreshToken) return;
+    translationModel.replaceChildren(...items.map((model) => Object.assign(document.createElement('option'), { value: model, textContent: model })));
+    translationModel.value = items.includes(defaultModel) ? defaultModel : items[0] ?? '';
+    translationModel.disabled = items.length === 0;
+    translationModelStatus.textContent = items.length === 0
+      ? 'No local Ollama models are installed.'
+      : `${items.length} local Ollama model${items.length === 1 ? '' : 's'} available.`;
+  } catch (error) {
+    if (!workspaceStillSelected(novelId, token) || refreshToken !== translationModelRefreshToken) return;
+    translationModel.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Local models unavailable' }));
+    translationModel.disabled = true;
+    translationModelStatus.textContent = error.message;
+  }
 }
 
 function renderWorkspaceJob(job) {
@@ -398,10 +427,17 @@ function showWorkspace(chapter) {
   resolveSource.disabled = false;
   showSourceChapterImport(chapter.nextChapterNumber === null ? chapter.chapterNumber + 1 : null);
   workspaceCatalogProgress = null;
+  translationModelRefreshToken += 1;
+  translationModel.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Loading local models' }));
+  translationModel.disabled = true;
+  translationModelStatus.textContent = '';
   clearSourceResolution();
   clearSourceIdentities();
   clearWorkspaceStatus();
-  if (chapter.hasSourceProvenance) void refreshWorkspace(chapter.novelId, token);
+  if (chapter.hasSourceProvenance) {
+    void refreshTranslationModels(chapter.novelId, token);
+    void refreshWorkspace(chapter.novelId, token);
+  }
   else void refreshSourceResolution(chapter.novelId, token);
 }
 
@@ -590,7 +626,11 @@ workspaceForm.addEventListener('submit', async (event) => {
     await request('/api/v1/jobs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ novelId: currentChapter.novelId, type: 'translate_chapters', target })
+      body: JSON.stringify({
+        novelId: currentChapter.novelId,
+        type: 'translate_chapters',
+        target: translationModel.value ? { ...target, model: translationModel.value } : target
+      })
     });
     setWorkspaceStatus('Translation job saved.');
     await refreshWorkspace(currentChapter.novelId);

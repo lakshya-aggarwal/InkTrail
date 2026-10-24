@@ -35,18 +35,25 @@ function requireOptionalText(value, name) {
   return value.trim();
 }
 
+function requireModel(value) {
+  const model = requireOptionalText(value, 'model');
+  if (model === null || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(model)) throw new ValidationError('model is invalid');
+  return model;
+}
+
 function hash(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
 export function canonicalizeChapterTarget(value) {
   const target = requireObject(value, 'target');
-  const keys = Object.keys(target).sort();
+  const model = Object.hasOwn(target, 'model') ? requireModel(target.model) : null;
+  const keys = Object.keys(target).filter((key) => key !== 'model').sort();
   if (keys.join(',') === 'endChapterNumber,startChapterNumber') {
     const startChapterNumber = requireChapterNumber(target.startChapterNumber, 'startChapterNumber');
     const endChapterNumber = requireChapterNumber(target.endChapterNumber, 'endChapterNumber');
     if (startChapterNumber > endChapterNumber) throw new ValidationError('chapter range is invalid');
-    const targetJson = JSON.stringify({ startChapterNumber, endChapterNumber });
+    const targetJson = JSON.stringify({ startChapterNumber, endChapterNumber, ...(model === null ? {} : { model }) });
     return { targetJson, targetHash: hash(targetJson), chapterNumbers: null, startChapterNumber, endChapterNumber };
   }
   if (keys.length === 1 && keys[0] === 'chapterNumbers' && Array.isArray(target.chapterNumbers) && target.chapterNumbers.length > 0) {
@@ -54,7 +61,7 @@ export function canonicalizeChapterTarget(value) {
     if (chapterNumbers.some((number, index) => index > 0 && number <= chapterNumbers[index - 1])) {
       throw new ValidationError('chapterNumbers must be strictly ascending and unique');
     }
-    const targetJson = JSON.stringify({ chapterNumbers });
+    const targetJson = JSON.stringify({ chapterNumbers, ...(model === null ? {} : { model }) });
     return { targetJson, targetHash: hash(targetJson), chapterNumbers, startChapterNumber: null, endChapterNumber: null };
   }
   throw new ValidationError('target must be a chapter range or chapterNumbers');

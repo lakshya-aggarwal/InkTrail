@@ -200,7 +200,8 @@ export function createTranslationJobRunner({ jobs, translationService, sourceImp
           await translationService.translateChapter({
             novelId: job.novelId,
             chapterNumber: prepared.chapterNumber,
-            claim: { jobId: job.id, claimToken: job.claimToken }
+            claim: { jobId: job.id, claimToken: job.claimToken },
+            ...(job.target.model === undefined ? {} : { model: job.target.model })
           });
           jobs.finishAttempt({ jobId: job.id, attemptId: prepared.attempt.id, claimToken: job.claimToken, state: 'succeeded' });
         } catch (error) {

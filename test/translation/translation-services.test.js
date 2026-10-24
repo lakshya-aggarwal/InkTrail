@@ -130,6 +130,29 @@ test('translates sourced chapters with bounded prior context and verified novel 
   assert.deepEqual(repositories.chapters.listTranslationRevisions(chapter.id), [result.revision]);
 });
 
+test('records the model captured by a durable translation request', async (t) => {
+  const { database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Model capture' });
+  const chapter = seededChapter(repositories, novel, 1);
+  const translate = createTranslationService({
+    database,
+    repositories,
+    provider: {
+      provider: 'ollama',
+      model: 'qwen3:30b',
+      async translate({ model }) {
+        return { paragraphs: ['Model-specific translation.'], model };
+      }
+    }
+  });
+
+  const result = await translate.translateChapter({ novelId: novel.id, chapterNumber: 1, model: 'qwen3:8b' });
+
+  assert.equal(result.revision.model, 'qwen3:8b');
+  assert.equal(repositories.chapters.listTranslationRevisions(chapter.id).at(-1).model, 'qwen3:8b');
+});
+
 test('skips a claim-bound translation when a direct translation already completed its checkpoint', async (t) => {
   const { database, repositories } = fixture();
   t.after(() => database.close());

@@ -272,6 +272,10 @@ export function createRouter({ libraryService, translationService, feedbackVerif
       writeJson(response, 200, { status: 'ok' });
       return;
     }
+    if (method === 'GET' && pathname === '/api/v1/translation-models') {
+      await handle(response, undefined, async () => writeJson(response, 200, await translationService.listModels()));
+      return;
+    }
     if (method === 'GET' && pathname === '/api/v1/novels') {
       await handle(response, undefined, async () => writeJson(response, 200, { items: libraryService.listNovels() }));
       return;

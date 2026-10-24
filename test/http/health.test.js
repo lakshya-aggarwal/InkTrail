@@ -10,3 +10,16 @@ test('GET /api/v1/health returns an ok status', async () => {
   assert.deepEqual(await response.json(), { status: 'ok' });
   await app.close();
 });
+
+test('GET /api/v1/translation-models returns locally available models', async () => {
+  const app = await startTestApp();
+  try {
+    const response = await app.request('/api/v1/translation-models');
+    assert.deepEqual(await response.json(), {
+      items: ['fixture-large', 'fixture-model'],
+      defaultModel: 'fixture-model'
+    });
+  } finally {
+    await app.close();
+  }
+});

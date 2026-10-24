@@ -28,6 +28,21 @@ paths:
                     example: ok
         '4XX':
           description: Malformed HTTP requests can be rejected by Node before InkTrail routes them. No InkTrail JSON error body is guaranteed.
+  /api/v1/translation-models:
+    get:
+      operationId: listTranslationModels
+      summary: List models installed in the local Ollama service
+      responses:
+        '200':
+          description: Available local models and the legacy default
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranslationModelList'
+        '502':
+          $ref: '#/components/responses/TranslationProviderFailed'
+        '4XX':
+          description: Malformed HTTP requests can be rejected by Node before InkTrail routes them. No InkTrail JSON error body is guaranteed.
   /api/v1/novels:
     get:
       operationId: listNovels
@@ -1240,6 +1255,21 @@ components:
           maxItems: 100
           items:
             $ref: '#/components/schemas/SourceResolutionAttemptSummary'
+    TranslationModelList:
+      type: object
+      required: [items, defaultModel]
+      properties:
+        items:
+          type: array
+          maxItems: 500
+          items:
+            type: string
+            maxLength: 255
+            pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$'
+        defaultModel:
+          type: string
+          maxLength: 255
+          pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$'
     SetReadingProgressInput:
       type: object
       required: [chapterNumber]
@@ -1603,16 +1633,24 @@ components:
             endChapterNumber:
               type: integer
               minimum: 1
+            model:
+              type: string
+              maxLength: 255
+              pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$'
         - type: object
           required: [chapterNumbers]
           properties:
             chapterNumbers:
+              description: Strictly ascending unique chapter numbers.
               type: array
               minItems: 1
               items:
                 type: integer
                 minimum: 1
-              description: Strictly ascending unique chapter numbers.
+            model:
+              type: string
+              maxLength: 255
+              pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$'
     CreateTranslationJobInput:
       type: object
       required: [novelId, type, target]

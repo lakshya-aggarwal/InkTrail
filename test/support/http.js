@@ -7,12 +7,16 @@ import { createApp } from '../../src/app.js';
 const fixtureTranslationProvider = {
   provider: 'fixture',
   model: 'fixture-model',
-  async translate({ originalChinese }) {
+  async listModels() {
+    return ['fixture-large', 'fixture-model'];
+  },
+  async translate({ originalChinese, model = 'fixture-model' }) {
     return {
       paragraphs: originalChinese
         .split(/\n\s*\n/)
         .filter(Boolean)
-        .map((_, index) => `Fixture translation ${index + 1}.`)
+        .map((_, index) => `Fixture translation ${index + 1}.`),
+      model
     };
   }
 };

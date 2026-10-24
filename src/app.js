@@ -34,7 +34,8 @@ import { createTranslationService } from './translation/translation-service.js';
 const browserAssets = new Map([
   ['/', { path: new URL('../public/index.html', import.meta.url), type: 'text/html; charset=utf-8' }],
   ['/app.js', { path: new URL('../public/app.js', import.meta.url), type: 'text/javascript; charset=utf-8' }],
-  ['/styles.css', { path: new URL('../public/styles.css', import.meta.url), type: 'text/css; charset=utf-8' }]
+  ['/styles.css', { path: new URL('../public/styles.css', import.meta.url), type: 'text/css; charset=utf-8' }],
+  ['/favicon.svg', { path: new URL('../desktop/assets/icon.svg', import.meta.url), type: 'image/svg+xml' }]
 ]);
 
 async function serveBrowserAsset(request, response) {

@@ -79,7 +79,10 @@ async function fixtureFetch(url) {
 const fixtureTranslationProvider = {
   provider: 'fixture',
   model: 'fixture-model',
-  async translate({ originalChinese }) {
+  async listModels() {
+    return ['fixture-large', 'fixture-model'];
+  },
+  async translate({ originalChinese, model = 'fixture-model' }) {
     if (originalChinese.includes('E2E_SLOW_TRANSLATION')) {
       await new Promise((resolve) => setTimeout(resolve, 2_500));
     }
@@ -92,7 +95,8 @@ const fixtureTranslationProvider = {
       paragraphs: originalChinese
         .split(/\n\s*\n/)
         .filter(Boolean)
-        .map((_, index) => `Fixture translation ${index + 1}.`)
+        .map((_, index) => `Fixture translation ${index + 1}.`),
+      model
     };
   }
 };

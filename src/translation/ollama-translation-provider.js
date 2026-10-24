@@ -13,6 +13,8 @@ const MAX_MEMORY_FIELD_CHARS = 500;
 const MAX_RESPONSE_BYTES = 1_000_000;
 const MAX_RESPONSE_PARAGRAPHS = 500;
 const MAX_RESPONSE_PARAGRAPH_CHARS = 16_000;
+const MAX_MODEL_NAME_CHARS = 255;
+const MAX_MODELS = 500;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
 const translationSchema = {
@@ -56,7 +58,7 @@ function requireArray(value, name) {
   return value;
 }
 
-function endpointUrl(endpoint) {
+function endpointUrl(endpoint, pathname) {
   if (typeof endpoint !== 'string' || endpoint.trim() !== endpoint) {
     fail('Ollama endpoint is invalid');
   }
@@ -65,13 +67,39 @@ function endpointUrl(endpoint) {
     if (url.protocol !== 'http:' || !LOOPBACK_HOSTS.has(url.hostname) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
       fail('Ollama endpoint must be a loopback HTTP URL');
     }
-    return new URL('/api/generate', url).href;
+    return new URL(pathname, url).href;
   } catch (error) {
     if (error instanceof TranslationProviderError) {
       throw error;
     }
     fail('Ollama endpoint is invalid');
   }
+}
+
+function modelName(value) {
+  const model = requireText(value, 'Ollama model', MAX_MODEL_NAME_CHARS);
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(model)) fail('Ollama model is invalid');
+  return model;
+}
+
+function parseModels(body) {
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    fail('Ollama model list is invalid');
+  }
+  if (payload === null || typeof payload !== 'object' || !Array.isArray(payload.models) || payload.models.length > MAX_MODELS) {
+    fail('Ollama model list is invalid');
+  }
+  const models = payload.models.map((item) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+      fail('Ollama model list is invalid');
+    }
+    return modelName(item.name);
+  });
+  if (new Set(models).size !== models.length) fail('Ollama model list is invalid');
+  return models.sort((left, right) => left.localeCompare(right));
 }
 
 function timeoutValue(timeoutMs) {
@@ -221,13 +249,34 @@ export function createOllamaTranslationProvider({ fetch = globalThis.fetch, endp
   if (typeof fetch !== 'function') {
     fail('Ollama fetch client is invalid');
   }
-  const url = endpointUrl(endpoint);
+  const url = endpointUrl(endpoint, '/api/generate');
+  const modelListUrl = endpointUrl(endpoint, '/api/tags');
   const timeout = timeoutValue(timeoutMs);
 
   return {
     provider: 'ollama',
     model: MODEL,
+    async listModels() {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
+      try {
+        let response;
+        try {
+          response = await fetch(modelListUrl, { redirect: 'error', signal: controller.signal });
+        } catch {
+          fail(controller.signal.aborted ? 'Ollama model list timed out' : 'Ollama model list request failed');
+        }
+        if (!response?.ok) fail('Ollama model list request was unsuccessful');
+        return parseModels(await readResponseBody(response, controller.signal));
+      } catch (error) {
+        if (error instanceof TranslationProviderError) throw error;
+        fail(controller.signal.aborted ? 'Ollama model list timed out' : 'Ollama model list is invalid');
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    },
     async translate(input) {
+      const model = input?.model === undefined ? MODEL : modelName(input.model);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);
       try {
@@ -239,7 +288,7 @@ export function createOllamaTranslationProvider({ fetch = globalThis.fetch, endp
             headers: { 'content-type': 'application/json' },
             signal: controller.signal,
             body: JSON.stringify({
-              model: MODEL,
+              model,
               prompt: buildTranslationPrompt(input),
               stream: false,
               think: false,
@@ -254,7 +303,7 @@ export function createOllamaTranslationProvider({ fetch = globalThis.fetch, endp
           fail('Ollama translation request was unsuccessful');
         }
         try {
-          return parseTranslationResponse(await readResponseBody(response, controller.signal));
+          return { ...parseTranslationResponse(await readResponseBody(response, controller.signal)), model };
         } catch (error) {
           if (error instanceof TranslationProviderError) {
             throw error;

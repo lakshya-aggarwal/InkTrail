@@ -103,10 +103,11 @@ for the runtime and release boundary.
 
 ### 3. Translate, read, and export
 
-1. Set the desired chapter range under **Continue this novel** and select
-   **Queue translation**. InkTrail uses local Ollama `qwen3:30b`, records
-   revisions instead of overwriting prior translations, and checks for common
-   quality and consistency issues.
+1. Set the desired chapter range and choose an installed model from **Ollama
+   model** under **Continue this novel**, then select **Queue translation**.
+   InkTrail records the chosen model with that job and its revisions instead
+   of overwriting prior translations, and checks for common quality and
+   consistency issues.
 2. Read with the previous and next controls or your arrow keys. Select
    **Report a translation issue** to suggest a context-aware correction.
 3. Select **Create EPUB** when translated chapters are available, then use the

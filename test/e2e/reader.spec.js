@@ -430,15 +430,23 @@ test('reader keeps feedback errors visible and focused', async ({ page }, testIn
   await expect(page.getByRole('button', { name: 'Report a translation issue' })).toBeFocused();
 });
 
-test('workspace queues the current sourced chapter and retains durable status after reload', async ({ page }, testInfo) => {
+test('workspace queues the selected local Ollama model and retains durable status after reload', async ({ page }, testInfo) => {
   const novelId = await seedSourcedChapters(page.request, { sourceUrls: [fixtureChapterUrl(testInfo, 11)] });
   await page.goto(`/?novel=${novelId}&chapter=1`);
 
   await expect(page.locator('#translation-workspace')).toBeVisible();
   await expect(page.getByLabel('From')).toHaveValue('1');
   await expect(page.getByLabel('To')).toHaveValue('1');
+  await expect(page.getByLabel('Ollama model')).toHaveValue('fixture-model');
+  await page.getByLabel('Ollama model').selectOption('fixture-large');
+  const queued = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/jobs');
   await page.getByRole('button', { name: 'Queue translation' }).click();
+  const job = await (await queued).json();
+  expect(job.target.model).toBe('fixture-large');
   await expect(page.locator('#workspace-job-status')).toHaveText('Translation is completed after 1 attempt.');
+
+  const chapter = await page.request.get(`/api/v1/novels/${novelId}/chapters/1`);
+  expect((await chapter.json()).model).toBe('fixture-large');
 
   await page.reload();
   await expect(page.locator('#workspace-job-status')).toHaveText('Translation is completed after 1 attempt.');
@@ -783,7 +791,7 @@ test('workspace submits a huge chapter range without expanding it in the browser
   expect(body).toEqual({
     novelId,
     type: 'translate_chapters',
-    target: { startChapterNumber: 1, endChapterNumber: 100000000 }
+    target: { startChapterNumber: 1, endChapterNumber: 100000000, model: 'fixture-model' }
   });
   expect(request.postData()?.length).toBeLessThan(200);
   await expect(page.locator('#workspace-status')).toHaveText('translation target must contain only imported source chapters');
