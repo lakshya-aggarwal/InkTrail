@@ -163,3 +163,6 @@ blob-report/
 
 # Isolated implementation worktrees
 .worktrees/
+desktop/src-tauri/resources/runtime/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/

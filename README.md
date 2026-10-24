@@ -34,6 +34,13 @@ correcting the plan's scoped package-name spelling.
 WebNovels app on `4177` untouched. Set `PORT` to use another valid port, for
 example `PORT=4278 pnpm start`.
 
+## Desktop wrapper
+
+The Tauri wrapper starts InkTrail on an ephemeral loopback port and opens the
+existing reader in a native window. For local development, run
+`pnpm desktop:dev`. See [the desktop wrapper architecture](docs/architecture/desktop-wrapper.md)
+for its staging and release boundary.
+
 ## Back up and restore local data
 
 Stop InkTrail before backing up. `pnpm backup:data /path/to/data

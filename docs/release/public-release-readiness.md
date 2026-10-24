@@ -6,7 +6,8 @@ machine. This is not yet a public hosted release.
 
 ## Before a Private Desktop Alpha
 
-- Package the current loopback service into an installable desktop application.
+- Turn the working Tauri development wrapper into an installable, signed
+  desktop application with a redistributable Node runtime for each platform.
 - Add a first-run path for provider configuration and local data location.
 - A checksum-verified, non-destructive local backup and restore command is now
   available. Surface it in the desktop application and verify it in a packaged

@@ -14,6 +14,8 @@
     "import:legacy": "node scripts/import-legacy-catalog.js",
     "backup:data": "node scripts/backup-local-data.js",
     "restore:data": "node scripts/restore-local-data.js",
+    "desktop:prepare": "node scripts/prepare-desktop-runtime.js",
+    "desktop:dev": "node scripts/prepare-desktop-runtime.js && cargo run --manifest-path desktop/src-tauri/Cargo.toml",
     "test": "node --test test/**/*.test.js",
     "test:e2e": "playwright test"
   },

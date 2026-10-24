@@ -74,6 +74,13 @@ validates that copy and restores only to a new directory, preserving the
 original library as a rollback path. The remaining private-alpha work is to
 surface this workflow from a packaged desktop application.
 
+## Desktop Wrapper
+
+In progress. The initial Tauri shell will supervise the existing local Node
+service and place its SQLite data and EPUB exports in the application-data
+directory. It is deliberately a wrapper phase, not a Rust rewrite or public
+distribution path.
+
 ## Later Boundaries
 
 1. Additional adapters and legacy import: migrate source sites one at a time

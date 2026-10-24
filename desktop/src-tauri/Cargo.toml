@@ -1,0 +1,18 @@
+[package]
+name = "inktrail-desktop"
+version = "0.1.0"
+description = "InkTrail local desktop wrapper"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "inktrail_desktop"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+libc = "0.2"
+tauri = { version = "2", features = [] }
+url = "2"
