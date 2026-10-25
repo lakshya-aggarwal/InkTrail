@@ -4,7 +4,7 @@ import { normalizeResolutionText } from './source-resolution-scoring.js';
 const SITE = 'kujiang';
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
-const DEFAULT_CATALOG_TIMEOUT_MS = 120_000;
+const DEFAULT_CATALOG_TIMEOUT_MS = 300_000;
 const DEFAULT_CATALOG_MAX_BODY_BYTES = 6_000_000;
 export const DEFAULT_MAX_CATALOG_ENTRIES = 12_000;
 export const DEFAULT_MAX_CATALOG_CANDIDATES = 4;
