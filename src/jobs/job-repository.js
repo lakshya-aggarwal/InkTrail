@@ -277,18 +277,11 @@ export function createJobRepository(database, clock) {
     join source_catalogs as catalogs on catalogs.id = entries.catalog_id
     where entries.catalog_id = ?
       and entries.novel_id = ?
-      and not (
-        exists (
-          select 1 from chapter_sources
-          where chapter_sources.novel_id = entries.novel_id
-            and chapter_sources.novel_source_id = catalogs.novel_source_id
-            and chapter_sources.normalized_url = entries.normalized_url
-        )
-        and exists (
-          select 1 from job_events
-          where job_events.catalog_entry_id = entries.id
-            and job_events.type = 'catalog_entry_completed'
-        )
+      and not exists (
+        select 1 from chapter_sources
+        where chapter_sources.novel_id = entries.novel_id
+          and chapter_sources.novel_source_id = catalogs.novel_source_id
+          and chapter_sources.normalized_url = entries.normalized_url
       )
     order by entries.ordinal
     limit 1
