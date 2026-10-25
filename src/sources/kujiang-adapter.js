@@ -121,7 +121,18 @@ function navigationUrl(content, relationship, baseUrl) {
   for (const anchor of content.matchAll(anchors)) {
     const attributes = attributesFrom(anchor[1]);
     if (attributes.rel?.toLowerCase() === relationship) {
-      return canonicalNavigationUrl(attributes.href, baseUrl);
+      const url = canonicalNavigationUrl(attributes.href, baseUrl);
+      return url === baseUrl ? null : url;
+    }
+  }
+  const pageLink = matchingElement(content, (tag, attributes) => (
+    (tag === 'li' || tag === 'div') && classes(attributes).has(`page_${relationship}`)
+  ));
+  if (pageLink) {
+    const anchor = anchors.exec(pageLink.content);
+    if (anchor) {
+      const url = canonicalNavigationUrl(attributesFrom(anchor[1]).href, baseUrl);
+      return url === baseUrl ? null : url;
     }
   }
   return null;
@@ -206,22 +217,27 @@ function chapterContentElement(html) {
     (tag === 'article' || tag === 'div') && (
       'data-chapter-content' in attributes ||
       attributes.id === 'chapterContent' ||
-      classes(attributes).has('article-content')
+      classes(attributes).has('article-content') ||
+      classes(attributes).has('chapter_main')
     )
   ));
 }
 
 function chapterTitleElement(html) {
-  return matchingElement(html, (tag, attributes) => tag === 'h1' && (
+  const title = matchingElement(html, (tag, attributes) => tag === 'h1' && (
     'data-chapter-title' in attributes ||
     classes(attributes).has('chapter-title') ||
     classes(attributes).has('article-title')
   ));
+  if (title) return title;
+  const header = matchingElement(html, (tag, attributes) => tag === 'div' && classes(attributes).has('chapter_header'));
+  return header ? matchingElement(header.content, (tag) => tag === 'h1') : null;
 }
 
 function chapterNavigationElement(html) {
-  return matchingElement(html, (tag, attributes) => tag === 'nav' && (
-    'data-chapter-navigation' in attributes || attributes.id === 'chapter-navigation'
+  return matchingElement(html, (tag, attributes) => (
+    (tag === 'nav' && ('data-chapter-navigation' in attributes || attributes.id === 'chapter-navigation')) ||
+    ((tag === 'div' || tag === 'ul') && classes(attributes).has('chapter_page_change'))
   ));
 }
 
