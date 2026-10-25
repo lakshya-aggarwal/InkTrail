@@ -156,7 +156,8 @@ test('uses an injected fetch client and requests only canonical HTML', async () 
   assert.equal(chapter.title, '第2491章 归途 & 灯火');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, chapterUrl);
-  assert.equal(calls[0].options.headers.accept, 'text/html');
+  assert.equal(calls[0].options.headers.accept, 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
+  assert.match(calls[0].options.headers['user-agent'], /^Mozilla\/5\.0/);
   assert.equal(calls[0].options.redirect, 'manual');
 });
 
@@ -225,6 +226,18 @@ test('fetches exactly one catalog document, preserves fetch guards, and revalida
     () => createKujiangAdapter({ fetch: async () => new Response('not html', { headers: { 'content-type': 'text/plain' } }) }).fetchCatalog(bookUrl),
     SourceFetchError
   );
+});
+
+test('uses larger bounded limits for a complete catalog than a chapter', async () => {
+  const catalog = await readFile(new URL('../fixtures/kujiang/catalog.html', import.meta.url), 'utf8');
+  const adapter = createKujiangAdapter({
+    fetch: async (url) => new Response(url.endsWith('/catalog') ? catalog : await chapterHtml(), {
+      headers: { 'content-length': '1000001', 'content-type': 'text/html' }
+    })
+  });
+
+  assert.equal((await adapter.fetchCatalog(bookUrl)).entries.length, 3);
+  await assert.rejects(() => adapter.fetchChapter(chapterUrl), SourceFetchError);
 });
 
 test('discovers configured alias-matched catalog candidates in memory with their exact ordinal entry', async () => {
