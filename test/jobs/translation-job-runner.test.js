@@ -140,7 +140,8 @@ function seededCatalog(repositories, novel, count = 2) {
     normalizedUrl: `https://source-runner.test/${novel.id}`,
     title: novel.title
   });
-  return repositories.catalogs.createOrGetSnapshot({
+  return {
+    ...repositories.catalogs.createOrGetSnapshot({
     novelId: novel.id,
     novelSourceId: source.id,
     site: source.site,
@@ -153,7 +154,9 @@ function seededCatalog(repositories, novel, count = 2) {
       normalizedUrl: `https://source-runner.test/${novel.id}/${index + 1}`,
       sourceTitle: `Source ${index + 1}`
     }))
-  });
+    }),
+    source
+  };
 }
 
 function createSourceImportService(repositories, behavior = async () => {}) {
@@ -280,6 +283,44 @@ test('imports source catalog entries in ascending ordinal order and completes on
       .sort(),
     snapshot.entries.map(({ id }) => id).sort()
   );
+  await runner.stop();
+});
+
+test('skips catalog entries already imported before the catalog job started', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Catalog pre-import' });
+  const snapshot = seededCatalog(repositories, novel, 3);
+  const chapter = repositories.chapters.recordChapter({
+    novelId: novel.id,
+    chapterNumber: 1,
+    title: 'Source 1',
+    originalText: 'Original 1',
+    sourceUrl: snapshot.entries[0].sourceUrl
+  });
+  repositories.sources.createChapterSource({
+    novelId: novel.id,
+    chapterId: chapter.id,
+    novelSourceId: snapshot.source.id,
+    site: snapshot.source.site,
+    externalChapterId: snapshot.entries[0].externalChapterId,
+    sourceUrl: snapshot.entries[0].sourceUrl,
+    normalizedUrl: snapshot.entries[0].normalizedUrl,
+    sourceTitle: snapshot.entries[0].sourceTitle,
+    previousSourceUrl: null,
+    nextSourceUrl: null,
+    fetchedAt: '2026-10-15T00:00:00.000Z',
+    contentSha256: 'a'.repeat(64)
+  });
+  const job = repositories.jobs.createSourceImportCatalogJob({ novelId: novel.id, target: { catalogId: snapshot.catalog.id } });
+  const sourceImportService = createSourceImportService(repositories);
+  const runner = createRunner({ repositories, clock, translationService: { async translateChapter() {} }, sourceImportService });
+
+  await runner.start();
+  await settle();
+
+  assert.deepEqual(sourceImportService.calls.map(({ chapterNumber }) => chapterNumber), [2, 3]);
+  assert.equal(repositories.jobs.getJob({ novelId: novel.id, jobId: job.id }).state, 'completed');
   await runner.stop();
 });
 

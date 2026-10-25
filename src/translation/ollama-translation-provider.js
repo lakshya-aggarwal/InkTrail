@@ -2,7 +2,7 @@ import { TranslationProviderError } from '../domain/errors.js';
 
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:11434';
 const MODEL = 'qwen3:30b';
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
 const MAX_TIMEOUT_MS = 300_000;
 const MAX_SOURCE_CHARS = 64_000;
 const MAX_SOURCE_SEGMENTS = 500;
@@ -293,7 +293,7 @@ export function createOllamaTranslationProvider({ fetch = globalThis.fetch, endp
               stream: false,
               think: false,
               format: translationSchema,
-              options: { temperature: 0.2, num_ctx: 32_768 }
+              options: { temperature: 0.2 }
             })
           });
         } catch {

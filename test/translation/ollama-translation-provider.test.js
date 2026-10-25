@@ -48,6 +48,7 @@ test('uses a bounded structured Ollama request and returns only translated parag
   assert.equal(body.model, 'qwen3:30b');
   assert.equal(body.stream, false);
   assert.equal(body.format.additionalProperties, false);
+  assert.deepEqual(body.options, { temperature: 0.2 });
 });
 
 test('lists installed Ollama models and captures a selected model for its translation', async () => {
