@@ -22,7 +22,8 @@ function routeError(response, error, resourceId) {
     return;
   }
   if (error instanceof SourceFetchError) {
-    writeJson(response, 502, errorBody('source_fetch_failed', 'Source chapter could not be fetched', true));
+    const previewOnly = !error.retryable;
+    writeJson(response, previewOnly ? 422 : 502, errorBody(previewOnly ? 'source_preview_only' : 'source_fetch_failed', previewOnly ? 'Source chapter only provides a preview' : 'Source chapter could not be fetched', !previewOnly));
     return;
   }
   if (error instanceof TranslationProviderError) {

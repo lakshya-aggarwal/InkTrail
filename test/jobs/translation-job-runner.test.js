@@ -356,6 +356,31 @@ test('source imports retry at fifteen-second intervals and pause after four fetc
   await runner.stop();
 });
 
+test('pauses source imports immediately when a chapter only provides a preview', async (t) => {
+  const { clock, database, repositories } = fixture();
+  t.after(() => database.close());
+  const novel = repositories.novels.createNovel({ title: 'Source preview' });
+  const snapshot = seededCatalog(repositories, novel, 1);
+  const job = repositories.jobs.createSourceImportCatalogJob({ novelId: novel.id, target: { catalogId: snapshot.catalog.id } });
+  const sourceImportService = createSourceImportService(repositories, async () => {
+    throw new SourceFetchError('preview only', { retryable: false });
+  });
+  const runner = createRunner({ repositories, clock, translationService: { async translateChapter() {} }, sourceImportService });
+
+  await runner.start();
+  await settle();
+
+  const paused = repositories.jobs.getJob({ novelId: novel.id, jobId: job.id });
+  assert.equal(sourceImportService.calls.length, 1);
+  assert.deepEqual({ state: paused.state, code: paused.lastErrorCode, message: paused.lastErrorMessage }, {
+    state: 'paused',
+    code: 'source_preview_only',
+    message: 'Source chapter only provides a preview.'
+  });
+  assert.deepEqual(repositories.jobs.listJobAttempts({ novelId: novel.id, jobId: job.id }).map(({ state }) => state), ['paused_after_failure']);
+  await runner.stop();
+});
+
 test('source integrity failures are terminal and retain no upstream detail', async (t) => {
   const { clock, database, repositories } = fixture();
   t.after(() => database.close());
