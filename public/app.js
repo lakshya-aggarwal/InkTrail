@@ -711,7 +711,7 @@ sourceCatalogForm.addEventListener('submit', async (event) => {
     discoverSourceCatalog.disabled = true;
     clearWorkspaceStatus();
     sourceBookUrl.value = bookUrl;
-    setWorkspaceStatus('Discovering the complete Kujiang catalog. Large novels can take up to two minutes.');
+    setWorkspaceStatus('Discovering the complete Kujiang catalog. Large novels can take up to five minutes.');
     await request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-catalogs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
