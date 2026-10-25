@@ -31,6 +31,9 @@ function errorDetails(error) {
 
 function sourceErrorDetails(error) {
   if (error instanceof SourceFetchError) {
+    if (!error.retryable) {
+      return { code: 'source_preview_only', message: 'Source chapter only provides a preview.', retryable: false, pause: true };
+    }
     return { code: 'source_unavailable', message: 'Source is temporarily unavailable.', retryable: true };
   }
   return { code: 'source_import_failed', message: 'Source import failed.', retryable: false };
@@ -131,7 +134,7 @@ export function createTranslationJobRunner({ jobs, translationService, sourceImp
                 catalogEntryId: entry.id,
                 claimToken: job.claimToken,
                 retry,
-                terminalState: details.retryable ? 'paused' : 'failed',
+                terminalState: details.pause || details.retryable ? 'paused' : 'failed',
                 nextRunAt: retry ? retryAt(clock, retryDelayMs) : null,
                 errorCode: details.code,
                 errorMessage: details.message

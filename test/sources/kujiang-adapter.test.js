@@ -129,6 +129,26 @@ test('parses Kujiang’s current named reader layout and its page controls', asy
   assert.equal(chapter.nextSourceUrl, 'https://www.kujiang.com/book/9/80');
 });
 
+test('parses Kujiang reader pages that use the chapter_content wrapper', () => {
+  const html = '<div class="chapter_content"><div class="chapter_header clearfix"><h1>第十一章：绕道而行！</h1></div><p>山路蜿蜒，前方雾气渐浓。</p><p>他停下脚步，选择绕道而行。</p><div class="chapter_page_change">上一章 下一章</div></div>';
+
+  const chapter = parseKujiangChapterHtml(html, 'https://www.kujiang.com/book/9/441');
+
+  assert.equal(chapter.title, '第十一章：绕道而行！');
+  assert.deepEqual(chapter.paragraphs, ['山路蜿蜒，前方雾气渐浓。', '他停下脚步，选择绕道而行。']);
+});
+
+test('rejects preview-only Kujiang chapter pages as non-retryable source errors', async () => {
+  const html = '<div class="chapter_content"><div class="chapter_crumb">第十一章：绕道而行！</div><div class="chapter_header clearfix"><h1>第十一章：绕道而行！</h1></div><p>本作品网站只提供部分试读</p><p>扫描下方二维码免费阅读后续章节</p></div>';
+  const adapter = createKujiangAdapter({ fetch: async () => htmlResponse(html) });
+
+  assert.throws(() => parseKujiangChapterHtml(html, 'https://www.kujiang.com/book/9/441'), /preview/);
+  await assert.rejects(
+    () => adapter.fetchChapter('https://www.kujiang.com/book/9/441'),
+    (error) => error instanceof SourceFetchError && error.retryable === false
+  );
+});
+
 test('rejects malformed content that has no Chinese story paragraph', () => {
   assert.throws(
     () => parseKujiangChapterHtml('<h1 data-chapter-title>Chapter</h1><article data-chapter-content><p>Read next</p></article>', chapterUrl),

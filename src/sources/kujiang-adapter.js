@@ -7,6 +7,7 @@ const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 const DEFAULT_CATALOG_TIMEOUT_MS = 300_000;
 const DEFAULT_CATALOG_MAX_BODY_BYTES = 6_000_000;
 export const DEFAULT_MAX_CATALOG_ENTRIES = 12_000;
+const PREVIEW_MARKERS = ['本作品网站只提供部分试读', '免费阅读后续章节'];
 export const DEFAULT_MAX_CATALOG_CANDIDATES = 4;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 3;
@@ -224,6 +225,7 @@ function chapterContentElement(html) {
       'data-chapter-content' in attributes ||
       attributes.id === 'chapterContent' ||
       classes(attributes).has('article-content') ||
+      classes(attributes).has('chapter_content') ||
       classes(attributes).has('chapter_main')
     )
   ));
@@ -252,7 +254,12 @@ function isChineseStoryParagraph(paragraph) {
 }
 
 function isBoilerplate(attributes) {
-  return 'data-chapter-boilerplate' in attributes || classes(attributes).has('chapter-boilerplate');
+  const classNames = classes(attributes);
+  return 'data-chapter-boilerplate' in attributes ||
+    classNames.has('chapter-boilerplate') ||
+    classNames.has('chapter_crumb') ||
+    classNames.has('chapter_header') ||
+    classNames.has('chapter_page_change');
 }
 
 function withoutBoilerplate(content) {
@@ -275,8 +282,13 @@ function withoutBoilerplate(content) {
   return depth === 0 ? kept + content.slice(cursor) : kept;
 }
 
-function storyParagraphs(content) {
-  return textFromHtml(withoutBoilerplate(content)).split('\n').filter(isChineseStoryParagraph);
+function storyParagraphs(content, sourceTitle) {
+  const paragraphs = textFromHtml(withoutBoilerplate(content)).split('\n').filter(isChineseStoryParagraph);
+  return paragraphs.filter((paragraph) => paragraph !== sourceTitle && !PREVIEW_MARKERS.some((marker) => paragraph.includes(marker)));
+}
+
+function hasPreviewMarker(content) {
+  return PREVIEW_MARKERS.some((marker) => textFromHtml(content).includes(marker));
 }
 
 function readChunk(reader, signal) {
@@ -459,8 +471,11 @@ export function parseKujiangChapterHtml(html, sourceUrl) {
   if (!sourceTitle) {
     throw new Error('source HTML is missing a chapter title');
   }
-  const paragraphs = storyParagraphs(content.content);
+  const paragraphs = storyParagraphs(content.content, sourceTitle);
   if (paragraphs.length === 0) {
+    if (hasPreviewMarker(content.content)) {
+      throw new Error('source HTML only provides a preview');
+    }
     throw new Error('source HTML has no Chinese story paragraphs');
   }
   const navigation = chapterNavigationElement(visibleHtml);
@@ -624,6 +639,9 @@ export function createKujiangAdapter({
       } catch (error) {
         if (error instanceof SourceFetchError) {
           throw error;
+        }
+        if (error?.message === 'source HTML only provides a preview') {
+          throw new SourceFetchError('Kujiang source only provides a preview', { cause: error, retryable: false });
         }
         throw new SourceFetchError('Kujiang source content could not be parsed', { cause: error });
       }
