@@ -119,6 +119,16 @@ test('preserves every narrative Chinese block in mixed paragraph markup', async 
   assert.deepEqual(chapter.paragraphs, ['第一段正文。', '第二段正文', '第二段续写。', '第三段正文。']);
 });
 
+test('parses Kujiang’s current named reader layout and its page controls', async () => {
+  const html = await readFile(new URL('../fixtures/kujiang/current-reader-layout.html', import.meta.url), 'utf8');
+  const chapter = parseKujiangChapterHtml(html, 'https://www.kujiang.com/book/9/12');
+
+  assert.equal(chapter.title, '第一章：新的开始');
+  assert.deepEqual(chapter.paragraphs, ['晨光穿过山谷，落在石阶上。', '少年抬头，看见了远方。']);
+  assert.equal(chapter.previousSourceUrl, null);
+  assert.equal(chapter.nextSourceUrl, 'https://www.kujiang.com/book/9/80');
+});
+
 test('rejects malformed content that has no Chinese story paragraph', () => {
   assert.throws(
     () => parseKujiangChapterHtml('<h1 data-chapter-title>Chapter</h1><article data-chapter-content><p>Read next</p></article>', chapterUrl),
