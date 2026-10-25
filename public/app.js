@@ -81,6 +81,12 @@ function readerState() {
   return novelId && Number.isSafeInteger(chapter) && chapter > 0 ? { novelId, chapter } : null;
 }
 
+function catalogBookUrl(value) {
+  const url = value.trim();
+  const match = /^https:\/\/www\.kujiang\.com\/book\/([1-9]\d*)(?:\/[1-9]\d*)?$/.exec(url);
+  return match ? `https://www.kujiang.com/book/${match[1]}` : url;
+}
+
 function setReaderState(novelId, chapter) { window.history.pushState({}, '', `/?${new URLSearchParams({ novel: novelId, chapter: String(chapter) })}`); }
 
 async function request(path, options) {
@@ -700,13 +706,15 @@ sourceCatalogForm.addEventListener('submit', async (event) => {
   if (!currentChapter?.hasSourceProvenance || !sourceBookUrl.value.trim()) return;
   const novelId = currentChapter.novelId;
   const token = workspaceToken;
+  const bookUrl = catalogBookUrl(sourceBookUrl.value);
   try {
     discoverSourceCatalog.disabled = true;
     clearWorkspaceStatus();
+    sourceBookUrl.value = bookUrl;
     await request(`/api/v1/novels/${encodeURIComponent(novelId)}/source-catalogs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ bookUrl: sourceBookUrl.value.trim() })
+      body: JSON.stringify({ bookUrl })
     });
     if (!workspaceStillSelected(novelId, token)) return;
     setWorkspaceStatus('Source catalog saved. Import starts only when you choose it.');

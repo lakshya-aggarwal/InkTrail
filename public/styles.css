@@ -37,6 +37,7 @@ input, select { background: #fffdf7; border: 1px solid var(--rule); color: var(-
 #translation-model { grid-column: 2 / -1; }
 .workspace-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
 #source-catalog-form { margin-top: 1rem; }
+#source-book-url-help { color: var(--muted-ink); font-family: system-ui, sans-serif; font-size: 0.9rem; margin: 0.5rem 0 0; }
 #source-resolution-form { margin-top: 1rem; }
 .source-catalog-controls, .source-resolution-controls { display: grid; gap: 0.75rem; grid-template-columns: minmax(0, 1fr) auto; }
 #source-chapter-import { border-bottom: 1px solid var(--rule); margin: 1.5rem 0 2.5rem; padding-bottom: 1.25rem; }
