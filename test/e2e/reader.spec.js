@@ -875,9 +875,12 @@ test('workspace discovers and controls a source catalog without interrupting rea
   await expect(page.request.get(`/api/v1/jobs?novelId=${novelBody.id}`).then((response) => response.json())).resolves.toEqual({ items: [] });
 
   const discovery = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/source-catalogs'));
-  await page.getByLabel('Add Kujiang source').fill(`https://www.kujiang.com/book/${bookId}`);
+  await page.getByLabel('Add Kujiang source').fill(`https://www.kujiang.com/book/${bookId}/${chapterId}`);
   await page.getByRole('button', { name: 'Discover source' }).click();
-  expect((await discovery).status()).toBe(201);
+  const discoveryRequest = await discovery;
+  expect(discoveryRequest.status()).toBe(201);
+  expect(discoveryRequest.request().postDataJSON()).toEqual({ bookUrl: `https://www.kujiang.com/book/${bookId}` });
+  await expect(page.getByLabel('Add Kujiang source')).toHaveValue(`https://www.kujiang.com/book/${bookId}`);
   await expect(page.locator('#source-catalog-status')).toHaveText('Kujiang catalog ready: 1 source chapters, 0 imported.');
   await expect(page.locator('#workspace-status')).toHaveText('Source catalog saved. Import starts only when you choose it.');
   await expect(page.request.get(`/api/v1/jobs?novelId=${novelBody.id}`).then((response) => response.json())).resolves.toEqual({ items: [] });

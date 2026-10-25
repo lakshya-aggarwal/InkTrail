@@ -71,7 +71,8 @@
           </section>
           <form id="source-catalog-form" novalidate>
             <label for="source-book-url">Add Kujiang source</label>
-            <div class="source-catalog-controls"><input autocomplete="url" id="source-book-url" inputmode="url" name="bookUrl" placeholder="https://www.kujiang.com/book/..." required type="url"><button id="discover-source-catalog" type="submit">Discover source</button></div>
+            <div class="source-catalog-controls"><input aria-describedby="source-book-url-help" autocomplete="url" id="source-book-url" inputmode="url" name="bookUrl" placeholder="https://www.kujiang.com/book/9" required type="url"><button id="discover-source-catalog" type="submit">Discover source</button></div>
+            <p id="source-book-url-help">Paste a Kujiang book or chapter link. A chapter link uses its book’s catalog.</p>
           </form>
           <div hidden id="source-catalog">
             <p id="source-catalog-status" role="status"></p>
