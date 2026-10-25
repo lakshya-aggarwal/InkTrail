@@ -4,10 +4,16 @@ import { normalizeResolutionText } from './source-resolution-scoring.js';
 const SITE = 'kujiang';
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
-export const DEFAULT_MAX_CATALOG_ENTRIES = 5_000;
+const DEFAULT_CATALOG_TIMEOUT_MS = 120_000;
+const DEFAULT_CATALOG_MAX_BODY_BYTES = 6_000_000;
+export const DEFAULT_MAX_CATALOG_ENTRIES = 12_000;
 export const DEFAULT_MAX_CATALOG_CANDIDATES = 4;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 3;
+const REQUEST_HEADERS = {
+  accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'user-agent': 'Mozilla/5.0 (compatible; InkTrail/1.0)'
+};
 
 function attributesFrom(source) {
   const attributes = {};
@@ -524,7 +530,7 @@ async function fetchHtml(fetchClient, normalizedUrl, timeoutMs, maxBodyBytes, ca
       let response;
       try {
         response = await fetchClient(currentUrl, {
-          headers: { accept: 'text/html' },
+          headers: REQUEST_HEADERS,
           redirect: 'manual',
           signal: controller.signal
         });
@@ -566,6 +572,8 @@ export function createKujiangAdapter({
   fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
+  catalogTimeoutMs = DEFAULT_CATALOG_TIMEOUT_MS,
+  catalogMaxBodyBytes = DEFAULT_CATALOG_MAX_BODY_BYTES,
   maxCatalogEntries = DEFAULT_MAX_CATALOG_ENTRIES,
   candidateIdentities = [],
   maxCatalogCandidates = DEFAULT_MAX_CATALOG_CANDIDATES
@@ -593,7 +601,7 @@ export function createKujiangAdapter({
       return normalizedUrl === catalogUrl ? catalogUrl : null;
     };
     try {
-      const html = await fetchHtml(fetch, catalogUrl, timeoutMs, maxBodyBytes, canonicalizeCatalogRedirect);
+      const html = await fetchHtml(fetch, catalogUrl, catalogTimeoutMs, catalogMaxBodyBytes, canonicalizeCatalogRedirect);
       return parseKujiangCatalogHtml(html, normalizedBookUrl, maxCatalogEntries);
     } catch (error) {
       if (error instanceof SourceFetchError || error instanceof ValidationError) throw error;
